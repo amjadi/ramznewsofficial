@@ -32,8 +32,15 @@ function sanitizeText(text) {
     text = text.split("نوشته")[0].trim();
   }
   
+  // Remove specific phrases identified by the user
+  text = text.replace(/End of پربیننده‌ترین‌ها/g, "");
+  text = text.replace(/End of مطالب پیشنهادی/g, "");
+  text = text.replace(/End of /g, "");
+  text = text.replace(/به گزارش تجارت نیوز،/g, "");
+  text = text.replace(/اینترنت بدون سانسور با سایفون دویچه‌ وله/g, "");
+  
   text = text.replace(/اولین بار در .* پدیدار شد\.?/g, "");
-  text = text.replace(/&zwnj;/g, "");
+  text = text.replace(/&zwnj;/g, " "); // Replace with space for better readability
   text = text.replace(/&nbsp;/g, " ");
   text = text.replace(/&laquo;/g, "\u00AB");
   text = text.replace(/&raquo;/g, "\u00BB");
@@ -45,7 +52,12 @@ function sanitizeText(text) {
   text = text.replace(/&mdash;/g, "-");
   text = text.replace(/&hellip;/g, "...");
   text = text.replace(/&[a-zA-Z0-9]+;/g, " ");
+  
+  // First cleanup of spaces
   text = text.replace(/\s+/g, " ").trim();
+  
+  // Add spaces around Persian punctuation for better readability
+  text = text.replace(/([،؛؟!])/g, " $1 ");
   
   text = text.replace(/.*را در اینستاگرام دنبال کنید.*/g, "");
   text = text.replace(/.*را در توییتر دنبال کنید.*/g, "");
@@ -60,6 +72,9 @@ function sanitizeText(text) {
   text = text.replace(/بی‌بی‌سی فارسی \/ .*/g, "");
   text = text.replace(/یورونیوز فارسی \/ .*/g, "");
   text = text.replace(/\n{2,}/g, "\n\n");
+  
+  // Final cleanup of spaces after all replacements
+  text = text.replace(/\s+/g, " ").trim();
   
   return text.trim();
 }
@@ -156,6 +171,223 @@ function simpleHash(str) {
     hash = hash & hash;
   }
   return Math.abs(hash).toString(36);
+}
+
+// Function to extract meaningful hashtags from post content
+function extractHashtags(post) {
+  // Detect post category
+  const detectCategory = (title, content, source) => {
+    const fullText = (title + " " + content).toLowerCase();
+    
+    // Check for crypto/finance content
+    if (source === "Crypto Asriran" || source === "Tejarat News") {
+      return "finance";
+    }
+    
+    // Check for political content
+    const politicalTerms = ["مذاکره", "سیاست", "دولت", "وزیر", "مجلس", "رئیس جمهور", "خامنه‌ای", "رهبر", "انتخابات"];
+    if (politicalTerms.some(term => fullText.includes(term))) {
+      return "politics";
+    }
+    
+    // Check for international news
+    const internationalTerms = ["بین‌المللی", "خارجی", "جهانی", "دیپلماتیک", "سازمان ملل"];
+    if (internationalTerms.some(term => fullText.includes(term))) {
+      return "international";
+    }
+    
+    // Check for tech content
+    const techTerms = ["فناوری", "تکنولوژی", "دیجیتال", "اینترنت", "هوش مصنوعی", "وب"];
+    if (techTerms.some(term => fullText.includes(term))) {
+      return "tech";
+    }
+    
+    // Default
+    return "news";
+  };
+  
+  // Common Persian stop words to exclude
+  const stopWords = [
+    "از", "به", "در", "با", "را", "که", "این", "است", "و", "برای", "های", "می", "یک",
+    "شد", "شده", "کرد", "شود", "دارد", "گفت", "باید", "کند", "بود", "دیگر", "هم", 
+    "خود", "آن", "ها", "اند", "نیز", "ای", "تا", "اما", "شده", "کرده", "بر", "او",
+    "ما", "من", "تو", "چه", "چرا", "کجا", "کی", "چگونه", "آنها", "پس", "اگر", "یا",
+    "هر", "بی", "بیش", "نمی", "می‌شود", "شده‌اند", "کرده‌اند", "داده", "رفت", "شده‌است",
+    "نیست", "بود", "شدن", "کردن", "کرده", "کرده‌است", "دهد", "کنند", "بودن", "بودند",
+    "شما", "آیا", "بوده", "داشت", "داشته", "خواهد", "خواهند", "روی", "علاوه", "پیدا",
+    "کنید", "آنرا", "وی", "بدون", "حتی", "چون", "مثل", "کنم", "باشد", "مورد",
+    "البته", "همان", "همین", "همه", "بسیار", "برخی", "ولی", "اینکه", "کدام", "وقتی",
+    "همچنین", "زیرا", "اکنون", "شان", "خیلی", "توسط", "پیش", "برخی", "علیه", "سوی",
+    "حال", "بین", "چند", "نباید", "همچنان", "زمان", "طور", "درباره", "زمانی"
+  ];
+  
+  // Named entity types that make good hashtags
+  const namedEntityPatterns = {
+    // Country names
+    countries: [
+      "ایران", "آمریکا", "روسیه", "چین", "فرانسه", "آلمان", "انگلستان", "بریتانیا", 
+      "ترکیه", "ایتالیا", "عراق", "سوریه", "لبنان", "فلسطین", "اسرائیل", "افغانستان", 
+      "پاکستان", "هند", "ژاپن", "کره", "کانادا", "ونزوئلا", "برزیل", "ارمنستان", 
+      "آذربایجان", "مصر", "عربستان", "امارات", "قطر", "کویت", "عمان", "بحرین"
+    ],
+    // Organization names
+    organizations: [
+      "سازمان ملل", "ناتو", "اتحادیه اروپا", "آژانس", "پنتاگون", "کنگره", "کاخ سفید", 
+      "وزارت خارجه", "شورای امنیت", "اوپک", "بانک جهانی", "صندوق بین‌المللی"
+    ],
+    // Crypto terms
+    crypto: [
+      "بیت‌کوین", "اتریوم", "ارز دیجیتال", "رمزارز", "بلاکچین", "توکن", "تتر", 
+      "کاردانو", "سولانا", "دوج کوین", "کوین", "صرافی", "شیبا", "استیبل"
+    ],
+    // Finance terms
+    finance: [
+      "بورس", "سهام", "دلار", "یورو", "سکه", "طلا", "نفت", "اقتصاد", "تورم", "بانک مرکزی",
+      "بازار", "قیمت", "ارز", "بهادار", "معاملات", "سهامداران", "بازار سرمایه"
+    ],
+    // Political terms
+    politics: [
+      "رئیس‌جمهور", "مجلس", "نماینده", "وزیر", "دولت", "انتخابات", "رهبر", "سیاست", 
+      "گفتگو", "مذاکره", "دیپلماسی", "سیاسی", "پارلمان", "حزب", "جمهوری", "دموکرات", 
+      "سنا", "کنگره", "رأی", "تحریم"
+    ],
+    // Technology terms
+    tech: [
+      "فناوری", "تکنولوژی", "هوش مصنوعی", "اینترنت", "کلود", "AI", "هوشمند", "اپلیکیشن",
+      "دیجیتال", "نرم‌افزار", "سخت‌افزار", "سایبری", "امنیت", "پلتفرم", "داده", "اپل",
+      "گوگل", "مایکروسافت", "تلگرام"
+    ],
+    // Social media terms
+    social: [
+      "اینستاگرام", "توییتر", "فیسبوک", "تلگرام", "پیام‌رسان", "واتساپ", "یوتیوب",
+      "تیک‌تاک", "توییت", "پست", "فالوور", "شبکه اجتماعی", "لایک"
+    ]
+  };
+  
+  // Get text from title and content
+  const title = post.title ? post.title : "";
+  const content = post.description ? post.description : "";
+  const category = detectCategory(title, content, post.source);
+  
+  // Extract named entities based on the patterns
+  const extractNamedEntities = (text) => {
+    const entities = [];
+    
+    // Check for each named entity type
+    Object.keys(namedEntityPatterns).forEach(entityType => {
+      namedEntityPatterns[entityType].forEach(entity => {
+        if (text.includes(entity)) {
+          entities.push(entity.replace(/\s+/g, "_"));
+        }
+      });
+    });
+    
+    return entities;
+  };
+  
+  // Important phrases to look for in the title - these make good hashtags
+  const extractPhrases = (text) => {
+    const phrases = [];
+    // Match 2-3 word phrases that don't contain stop words
+    const regex = /(\b[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]{3,}(\s+[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]{3,}){1,2}\b)/g;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      const phrase = match[0].trim();
+      // Ensure no phrase contains stop words
+      const phraseWords = phrase.split(/\s+/);
+      if (!phraseWords.some(word => stopWords.includes(word)) && phraseWords.length <= 3) {
+        phrases.push(phrase);
+      }
+    }
+    return phrases;
+  };
+  
+  // Extract important phrases from title (prioritize these)
+  const titlePhrases = extractPhrases(title);
+  
+  // Extract named entities from both title and content
+  const namedEntities = extractNamedEntities(title + " " + content);
+  
+  // Combine text and split into words
+  let text = (title + " " + content).replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\s]/g, " ");
+  let words = text.split(/\s+/).filter(word => word.length > 3);
+  
+  // Filter out stop words and short words
+  words = words.filter(word => !stopWords.includes(word) && word.length >= 4);
+  
+  // Count word frequencies
+  const wordFrequency = {};
+  words.forEach(word => {
+    wordFrequency[word] = (wordFrequency[word] || 0) + 1;
+  });
+  
+  // Sort words by frequency
+  let sortedWords = Object.keys(wordFrequency).sort((a, b) => {
+    return wordFrequency[b] - wordFrequency[a];
+  });
+  
+  // Get the top words
+  sortedWords = sortedWords.slice(0, 8);
+  
+  // Format phrases into hashtags (replace spaces with underscores)
+  const phraseHashtags = titlePhrases.map(phrase => phrase.replace(/\s+/g, "_"));
+  
+  // Default hashtags based on category
+  const defaultHashtags = [];
+  
+  // Category-specific hashtags
+  if (category === "finance" || post.source === "Crypto Asriran" || post.source === "Tejarat News") {
+    defaultHashtags.push("ارز_دیجیتال", "بیت_کوین", "اقتصاد");
+  } else if (category === "politics") {
+    defaultHashtags.push("سیاست", "ایران", "اخبار");
+  } else if (category === "international") {
+    defaultHashtags.push("جهان", "بین_الملل", "اخبار");
+  } else if (category === "tech") {
+    defaultHashtags.push("فناوری", "تکنولوژی", "دیجیتال");
+  } else {
+    // Default news hashtags
+    defaultHashtags.push("اخبار", "ایران", "جهان");
+  }
+  
+  // Combine all hashtag types, removing duplicates
+  const allHashtags = [...new Set([
+    ...namedEntities, 
+    ...phraseHashtags, 
+    ...sortedWords,
+    ...defaultHashtags
+  ])];
+  
+  // Score and prioritize hashtags
+  const scoreHashtag = (hashtag) => {
+    let score = 0;
+    // Named entities get highest priority
+    if (namedEntities.includes(hashtag)) score += 100;
+    // Phrases from title get next priority
+    if (phraseHashtags.includes(hashtag)) score += 80;
+    // Top frequency words get scores based on frequency
+    const freq = wordFrequency[hashtag] || 0;
+    score += freq * 5;
+    // Default hashtags get a small boost
+    if (defaultHashtags.includes(hashtag)) score += 10;
+    
+    // Length bonus/penalty - not too short, not too long
+    if (hashtag.length < 5) score -= 20;
+    if (hashtag.length > 20) score -= 30;
+    
+    return score;
+  };
+  
+  // Prioritize hashtags based on scoring
+  const finalHashtags = allHashtags
+    .sort((a, b) => scoreHashtag(b) - scoreHashtag(a))
+    .slice(0, 5);  // Limit to 5 hashtags
+  
+  // Format hashtags as string with # prefix
+  if (finalHashtags.length > 0) {
+    return `\n\n${finalHashtags.map(tag => `#${tag}`).join(" ")}`;
+  }
+  
+  return "";
 }
 
 // KV Storage functions
@@ -296,12 +528,8 @@ async function sendTelegramPost(post, env) {
     
     const channelLink = `\n\n@ramznewsofficial`;
     
-    let hashtags = "";
-    if (post.source === "Crypto Asriran" || post.source === "Tejarat News") {
-      hashtags = `\n\n#ارز_دیجیتال #بیت_کوین #کریپتو`;
-    } else if (post.source === "BBC Persian" || post.source === "DW Persian" || post.source === "Euronews Persian") {
-      hashtags = `\n\n#اخبار #ایران #جهان`;
-    }
+    // Generate hashtags using the new function
+    const hashtags = extractHashtags(post);
     
     const maxLength = validImage ? 900 : 3900;
     const otherPartsLength = titleText.length + hashtags.length + channelLink.length;
