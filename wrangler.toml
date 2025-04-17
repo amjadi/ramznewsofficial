@@ -5,7 +5,7 @@ node_compat = true
 
 # Set up KV namespace for tracking posts
 kv_namespaces = [
-  { binding = "POST_TRACKER", id = "فقط شناسه KV namespace را که از داشبورد کلادفلر کپی کرده‌اید اینجا قرار دهید" }
+  { binding = "POST_TRACKER", id = "6275727dfdcf4de29088dba0313e6dcc" }
 ]
 
 [triggers]
