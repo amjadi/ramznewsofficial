@@ -1,0 +1,13 @@
+name = "ramznews-worker"
+main = "src/index.js"
+compatibility_date = "2023-11-01"
+node_compat = true
+
+# Set up KV namespace for tracking posts
+kv_namespaces = [
+  { binding = "POST_TRACKER", id = "POST_TRACKER_ID", preview_id = "POST_TRACKER_PREVIEW_ID" }
+]
+
+[triggers]
+# Run every 30 minutes
+crons = ["*/30 * * * *"] 

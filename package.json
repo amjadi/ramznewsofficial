@@ -1,0 +1,15 @@
+{
+  "name": "ramznews-worker",
+  "version": "1.0.0",
+  "description": "Ramz News Cloudflare Worker for RSS to Telegram bot",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.19.0"
+  }
+} 
