@@ -1025,6 +1025,61 @@ export default {
       });
     }
     
+    if (url.pathname === "/webhook") {
+      if (request.method === "POST") {
+        try {
+          const payload = await request.json();
+          console.log("Webhook received:", JSON.stringify(payload));
+          
+          // در اینجا می‌توانید پردازش پیام‌های دریافتی از تلگرام را انجام دهید
+          // برای مثال، اگر کاربری پیامی بفرستد، می‌توانید پاسخ مناسب را ارسال کنید
+          
+          if (payload.message && payload.message.text === "/start") {
+            // ارسال پیام خوش‌آمدگویی
+            const chatId = payload.message.chat.id;
+            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: chatId,
+                text: "سلام! به ربات خبری رمز نیوز خوش آمدید. اخبار به طور خودکار در کانال @ramznewsofficial منتشر می‌شوند."
+              })
+            });
+          }
+          
+          return new Response("OK", { status: 200 });
+        } catch (error) {
+          console.error("Error processing webhook:", error);
+          return new Response("Bad Request", { status: 400 });
+        }
+      } else {
+        return new Response("Method Not Allowed", { status: 405 });
+      }
+    }
+    
+    if (url.pathname === "/set-webhook") {
+      // تنظیم وب هوک تلگرام (فقط برای ادمین‌ها)
+      const webhookUrl = `${url.protocol}//${url.hostname}/webhook`;
+      try {
+        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: webhookUrl })
+        });
+        
+        const result = await response.json();
+        return new Response(JSON.stringify(result), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+    }
+    
     if (url.pathname === "/clear-old") {
       try {
         if (env && env.POST_TRACKER) {
