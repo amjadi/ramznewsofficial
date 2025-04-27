@@ -12,10 +12,7 @@ const RSS_FEEDS = [
   { url: "https://tejaratnews.com/feed/", source: "Tejarat News" },
   // Crypto/blockchain RSS feeds
   { url: "https://ramzarz.news/feed/", source: "Ramzarz News" },
-  { url: "https://coiniran.com/feed/", source: "Coin Iran" },
   { url: "https://arzdigital.com/feed/", source: "Arz Digital" },
-  // Technology RSS feed
-  { url: "https://itiran.com/feed/", source: "IT Iran" },
 ];
 
 // Utility functions
@@ -43,7 +40,10 @@ function sanitizeText(text) {
   text = text.replace(/End of مطالب پیشنهادی/g, "");
   text = text.replace(/End of /g, "");
   text = text.replace(/به گزارش تجارت نیوز،/g, "");
+  
+  // Specifically target and remove the DW promotional phrase - high priority
   text = text.replace(/اینترنت بدون سانسور با سایفون دویچه‌ وله/g, "");
+  text = text.replace(/اینترنت بدون سانسور با سایفون/g, "");
   
   // Additional cleanup for new RSS feeds
   text = text.replace(/زمان مطالعه:?\s*\d+\s*دقیقه/g, "");
@@ -54,10 +54,11 @@ function sanitizeText(text) {
   text = text.replace(/\[&#8230;\]/g, "...");
   text = text.replace(/\[\s*…\s*\]/g, "...");
   
-  // Remove "Read more" type links
+  // Remove "Read more" type links and DW specific "بیشتر بخوانید" links
   text = text.replace(/ادامه مطلب را بخوانید.*/g, "");
   text = text.replace(/برای مشاهده متن کامل.*/g, "");
   text = text.replace(/برای مطالعه ادامه خبر.*/g, "");
+  text = text.replace(/بیشتر بخوانید:.*/g, "");
   
   // Clean URLs at the end of descriptions
   text = text.replace(/https?:\/\/[^\s]+$/, "");
@@ -85,6 +86,7 @@ function sanitizeText(text) {
   text = text.replace(/.*را در توییتر دنبال کنید.*/g, "");
   text = text.replace(/.*را در فیسبوک دنبال کنید.*/g, "");
   text = text.replace(/.*را در تلگرام دنبال کنید.*/g, "");
+  text = text.replace(/دویچه وله فارسی را در .* دنبال کنید/g, "");
   text = text.replace(/عکس:.*?(?=\n|$)/g, "");
   text = text.replace(/منبع:.*?(?=\n|$)/g, "");
   text = text.replace(/تصویر:.*?(?=\n|$)/g, "");
@@ -93,10 +95,18 @@ function sanitizeText(text) {
   text = text.replace(/دویچه وله فارسی \/ .*/g, "");
   text = text.replace(/بی‌بی‌سی فارسی \/ .*/g, "");
   text = text.replace(/یورونیوز فارسی \/ .*/g, "");
-  text = text.replace(/\n{2,}/g, "\n\n");
+  
+  // Ensure proper paragraph formatting with correct line breaks
+  text = text.replace(/\.\s+([^a-z])/g, ".\n\n$1"); // Add double line break after periods followed by non-lowercase letter
+  text = text.replace(/\n{3,}/g, "\n\n"); // Normalize multiple line breaks to at most two
   
   // Final cleanup of spaces after all replacements
   text = text.replace(/\s+/g, " ").trim();
+  
+  // Ensure the text ends with a period
+  if (text && text.length > 0 && !/[.!?؟،؛]$/.test(text)) {
+    text += ".";
+  }
   
   return text.trim();
 }
@@ -205,7 +215,6 @@ function extractHashtags(post) {
     if (source === "Crypto Asriran" || 
         source === "Tejarat News" || 
         source === "Ramzarz News" || 
-        source === "Coin Iran" || 
         source === "Arz Digital" || 
         fullText.includes("ارز دیجیتال") || 
         fullText.includes("بیت کوین") || 
@@ -216,7 +225,7 @@ function extractHashtags(post) {
     }
     
     // Check for tech content - include IT Iran
-    if (source === "IT Iran" || 
+    if (
         fullText.includes("فناوری") || 
         fullText.includes("تکنولوژی") || 
         fullText.includes("هوش مصنوعی") || 
@@ -553,6 +562,16 @@ async function markPostAsSent(postIdentifier, env, postData = null) {
 // Telegram posting function
 async function sendTelegramPost(post, env) {
   try {
+    // Special handling for DW Persian content to ensure promotional content is removed
+    if (post.source === "DW Persian") {
+      post.description = post.description
+        .replace(/اینترنت بدون سانسور با سایفون دویچه‌ وله/g, "")
+        .replace(/اینترنت بدون سانسور با سایفون/g, "")
+        .replace(/دویچه وله فارسی را در .* دنبال کنید/g, "")
+        .replace(/بیشتر بخوانید:.*/g, "")
+        .replace(/\n{3,}/g, "\n\n");
+    }
+    
     const cleanDescription = post.description;
     const cleanTitle = post.title ? sanitizeText(post.title) : "";
     const validImage = post.image && isValidUrl(post.image) ? post.image : null;
@@ -575,53 +594,52 @@ async function sendTelegramPost(post, env) {
     if (cleanDescription.length <= maxDescriptionLength) {
       truncatedDescription = cleanDescription;
     } else {
-      const paragraphs = cleanDescription.split(/\n+/);
+      // Better paragraph handling for DW Persian or any feed
+      const paragraphs = cleanDescription.split(/\n\n+/);
       let currentLength = 0;
       
       for (const paragraph of paragraphs) {
-        if (currentLength + paragraph.length + 2 > maxDescriptionLength) {
+        // Check if adding this paragraph would exceed the limit
+        if (currentLength + paragraph.length + 4 > maxDescriptionLength) {
+          // If we can't even fit one paragraph, handle special case
           if (currentLength === 0) {
-            // If first paragraph is already too long, we need to truncate it smartly
-            const availableText = paragraph.substring(0, maxDescriptionLength);
+            // Try to find sentences and include as many complete sentences as possible
+            const sentences = paragraph.split(/(?<=[.!?؟،؛])\s+/);
+            let sentenceLength = 0;
             
-            // Look for sentence endings (Persian and Latin punctuation)
-            const lastSentenceEnd = Math.max(
-              availableText.lastIndexOf(". "),
-              availableText.lastIndexOf("! "),
-              availableText.lastIndexOf("? "),
-              availableText.lastIndexOf("؟ "),
-              availableText.lastIndexOf("! "),
-              availableText.lastIndexOf(". "),
-              availableText.lastIndexOf("؛ "),
-              availableText.lastIndexOf("، ")
-            );
-            
-            if (lastSentenceEnd > maxDescriptionLength * 0.6) {
-              // Use the last complete sentence if it's at least 60% of available text
-              truncatedDescription = paragraph.substring(0, lastSentenceEnd + 1).trim();
-              
-              // Ensure text ends with proper punctuation
-              if (!/[.!?؟،؛]$/.test(truncatedDescription)) {
-                truncatedDescription += ".";
+            for (const sentence of sentences) {
+              if (sentenceLength + sentence.length + 1 > maxDescriptionLength - 3) {
+                break;
               }
-            } else {
-              // Find the last space to avoid cutting words
-              const lastSpace = availableText.lastIndexOf(" ", maxDescriptionLength - 4);
-              if (lastSpace > maxDescriptionLength * 0.8) {
+              
+              if (truncatedDescription) {
+                truncatedDescription += " ";
+              }
+              truncatedDescription += sentence;
+              sentenceLength += sentence.length + 1;
+            }
+            
+            // If we couldn't extract even one sentence properly, truncate with ellipsis
+            if (truncatedDescription.length === 0) {
+              const availableLength = maxDescriptionLength - 3; // Account for ellipsis
+              const lastSpace = paragraph.substring(0, availableLength).lastIndexOf(" ");
+              if (lastSpace > availableLength * 0.8) {
                 truncatedDescription = paragraph.substring(0, lastSpace).trim() + "...";
               } else {
-                truncatedDescription = availableText.substring(0, maxDescriptionLength - 3).trim() + "...";
+                truncatedDescription = paragraph.substring(0, availableLength).trim() + "...";
               }
             }
           }
+          // We've reached our limit with complete paragraphs
           break;
         }
         
+        // Add paragraph with double line breaks
         if (truncatedDescription) {
           truncatedDescription += "\n\n";
         }
         truncatedDescription += paragraph;
-        currentLength += paragraph.length + 2;
+        currentLength += paragraph.length + 4; // Account for paragraph breaks
       }
     }
     
@@ -816,7 +834,11 @@ async function fetchFullContent(url, source) {
         }
       }
     } else if (source === "DW Persian") {
-      const articleBodyMatch = /<div[^>]*class="[^"]*longText[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html);
+      // Improved content extraction for DW Persian
+      const articleBodyMatch = /<div[^>]*class="[^"]*longText[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) || 
+                              /<div[^>]*class="[^"]*article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) ||
+                              /<div[^>]*class="[^"]*dw-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html);
+      
       if (articleBodyMatch) {
         const articleBody = articleBodyMatch[1];
         const paragraphs = [];
@@ -824,18 +846,49 @@ async function fetchFullContent(url, source) {
         let paragraphMatch;
         
         while ((paragraphMatch = paragraphRegex.exec(articleBody)) !== null) {
-          paragraphs.push(sanitizeText(paragraphMatch[1]));
+          // Clean each paragraph individually to ensure no promotional content
+          const cleanParagraph = paragraphMatch[1]
+            .replace(/اینترنت بدون سانسور با سایفون دویچه‌ وله/g, "")
+            .replace(/اینترنت بدون سانسور با سایفون/g, "")
+            .replace(/دویچه وله فارسی را در .* دنبال کنید/g, "")
+            .replace(/بیشتر بخوانید:.*/g, "");
+          
+          // Only add non-empty paragraphs after cleaning
+          if (cleanParagraph && cleanParagraph.trim().length > 0) {
+            const sanitizedParagraph = sanitizeText(cleanParagraph);
+            if (sanitizedParagraph && sanitizedParagraph.trim().length > 0) {
+              paragraphs.push(sanitizedParagraph);
+            }
+          }
         }
         
+        // Join paragraphs with double line breaks for better readability
         content = paragraphs.join("\n\n");
         
-        const imgMatch = /<img[^>]+data-src="([^">]+)"[^>]*>/i.exec(html);
-        if (imgMatch) {
-          image = imgMatch[1];
-        } else {
-          const metaImgMatch = /<meta[^>]+property="og:image"[^>]+content="([^">]+)"[^>]*>/i.exec(html);
-          if (metaImgMatch) {
-            image = metaImgMatch[1];
+        // Apply proper paragraph formatting
+        content = content
+          .replace(/\.\s+([A-Z\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF])/g, ".\n\n$1")
+          .replace(/\n{3,}/g, "\n\n");
+        
+        // Ensure content ends with a period
+        if (content && content.length > 0 && !/[.!?؟،؛]$/.test(content)) {
+          content += ".";
+        }
+        
+        // Get the best possible image
+        const imgSelectors = [
+          /<img[^>]+data-src="([^">]+)"[^>]*>/i,
+          /<img[^>]+class="[^"]*hero-media__image[^"]*"[^>]+src="([^">]+)"[^>]*>/i,
+          /<meta[^>]+property="og:image"[^>]+content="([^">]+)"[^>]*>/i,
+          /<img[^>]+class="[^"]*image-landscape[^"]*"[^>]+src="([^">]+)"[^>]*>/i,
+          /<img[^>]+class="[^"]*image-hero[^"]*"[^>]+src="([^">]+)"[^>]*>/i
+        ];
+        
+        for (const selector of imgSelectors) {
+          const match = selector.exec(html);
+          if (match) {
+            image = match[1];
+            break;
           }
         }
       }
@@ -863,7 +916,7 @@ async function fetchFullContent(url, source) {
           }
         }
       }
-    } else if (source === "Ramzarz News" || source === "Coin Iran" || source === "Arz Digital") {
+    } else if (source === "Ramzarz News" || source === "Arz Digital") {
       // Handle crypto news sites - WordPress-based sites
       const articleBodyMatch = /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) || 
                               /<div[^>]*class="[^"]*post-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) ||
@@ -885,42 +938,6 @@ async function fetchFullContent(url, source) {
         // Image extraction from Crypto news sites
         // First try featured image
         const featuredImgMatch = /<img[^>]+class="[^"]*(?:wp-post-image|attachment-post-thumbnail)[^"]*"[^>]+src="([^">]+)"[^>]*>/i.exec(html);
-        if (featuredImgMatch) {
-          image = featuredImgMatch[1];
-        } else {
-          // Try OpenGraph image
-          const ogImgMatch = /<meta[^>]+property="og:image"[^>]+content="([^">]+)"[^>]*>/i.exec(html);
-          if (ogImgMatch) {
-            image = ogImgMatch[1];
-          } else {
-            // Try any image in the content
-            const contentImgMatch = /<img[^>]+src="([^">]+)"[^>]*>/i.exec(articleBody);
-            if (contentImgMatch) {
-              image = contentImgMatch[1];
-            }
-          }
-        }
-      }
-    } else if (source === "IT Iran") {
-      // Handle IT Iran (tech news)
-      const articleBodyMatch = /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) || 
-                              /<div[^>]*class="[^"]*post-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) ||
-                              /<article[^>]*class="[^"]*post-content[^"]*"[^>]*>([\s\S]*?)<\/article>/i.exec(html);
-      
-      if (articleBodyMatch) {
-        const articleBody = articleBodyMatch[1];
-        const paragraphs = [];
-        const paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
-        let paragraphMatch;
-        
-        while ((paragraphMatch = paragraphRegex.exec(articleBody)) !== null) {
-          paragraphs.push(sanitizeText(paragraphMatch[1]));
-        }
-        
-        content = paragraphs.join("\n\n");
-        
-        // Image extraction from IT Iran
-        const featuredImgMatch = /<img[^>]+class="[^"]*(?:wp-post-image|attachment-full)[^"]*"[^>]+src="([^">]+)"[^>]*>/i.exec(html);
         if (featuredImgMatch) {
           image = featuredImgMatch[1];
         } else {
@@ -1379,7 +1396,7 @@ async function processFeeds(env) {
         }
       }
     } catch (error) {
-      console.error(`خطا در پاکسازی پست‌های قدیمی: ${error.message}`);
+      console.error(`Error cleaning up old posts: ${error.message}`);
     }
     
     console.log(`پردازش با موفقیت به پایان رسید. ${successCount} پست ارسال شد. ${failureCount} خطا رخ داد. ${duplicateCount} پست تکراری شناسایی شد.`);
@@ -1530,4 +1547,4 @@ export default {
   
   // اضافه کردن processFeeds برای دسترسی از خارج
   processFeeds
-}; 
+};
