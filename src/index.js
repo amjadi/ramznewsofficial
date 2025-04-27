@@ -45,6 +45,12 @@ function sanitizeText(text) {
   text = text.replace(/اینترنت بدون سانسور با سایفون دویچه‌ وله/g, "");
   text = text.replace(/اینترنت بدون سانسور با سایفون/g, "");
   
+  // Remove Euronews promotional content
+  text = text.replace(/یورونیوز در «سرخط خبرها» مهم‌ترین رویدادهای ایران و جهان را در دو نوبت مرور می‌کند.*/g, "");
+  text = text.replace(/«مجله شامگاهی» برنامه‌ای تصویری از یورونیوز است که هر شب.*/g, "");
+  text = text.replace(/«سرخط خبرها» مجموعه‌ای است که یورونیوز [^\.]*\./g, "");
+  text = text.replace(/در این قسمت مهم‌ترین عناوین خبری.*/g, "");
+  
   // Additional cleanup for new RSS feeds
   text = text.replace(/زمان مطالعه:?\s*\d+\s*دقیقه/g, "");
   text = text.replace(/نوشته .* اولین بار در .* پدیدار شد\.?/g, "");
@@ -87,6 +93,7 @@ function sanitizeText(text) {
   text = text.replace(/.*را در فیسبوک دنبال کنید.*/g, "");
   text = text.replace(/.*را در تلگرام دنبال کنید.*/g, "");
   text = text.replace(/دویچه وله فارسی را در .* دنبال کنید/g, "");
+  text = text.replace(/یورونیوز فارسی را در .* دنبال کنید/g, "");
   text = text.replace(/عکس:.*?(?=\n|$)/g, "");
   text = text.replace(/منبع:.*?(?=\n|$)/g, "");
   text = text.replace(/تصویر:.*?(?=\n|$)/g, "");
@@ -572,6 +579,18 @@ async function sendTelegramPost(post, env) {
         .replace(/\n{3,}/g, "\n\n");
     }
     
+    // Special handling for Euronews Persian content
+    if (post.source === "Euronews Persian") {
+      post.description = post.description
+        .replace(/یورونیوز در «سرخط خبرها» مهم‌ترین رویدادهای ایران و جهان را در دو نوبت مرور می‌کند.*/g, "")
+        .replace(/«مجله شامگاهی» برنامه‌ای تصویری از یورونیوز است که هر شب.*/g, "")
+        .replace(/«سرخط خبرها» مجموعه‌ای است که یورونیوز [^\.]*\./g, "")
+        .replace(/در این قسمت مهم‌ترین عناوین خبری.*/g, "")
+        .replace(/یورونیوز فارسی را در .* دنبال کنید/g, "")
+        .replace(/یورونیوز فارسی \/ .*/g, "")
+        .replace(/\n{3,}/g, "\n\n");
+    }
+    
     const cleanDescription = post.description;
     const cleanTitle = post.title ? sanitizeText(post.title) : "";
     const validImage = post.image && isValidUrl(post.image) ? post.image : null;
@@ -893,7 +912,10 @@ async function fetchFullContent(url, source) {
         }
       }
     } else if (source === "Euronews Persian") {
-      const articleBodyMatch = /<div[^>]*class="[^"]*c-article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html);
+      const articleBodyMatch = /<div[^>]*class="[^"]*c-article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) ||
+                              /<div[^>]*class="[^"]*article__content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) ||
+                              /<div[^>]*class="[^"]*article-text[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html);
+      
       if (articleBodyMatch) {
         const articleBody = articleBodyMatch[1];
         const paragraphs = [];
@@ -901,18 +923,40 @@ async function fetchFullContent(url, source) {
         let paragraphMatch;
         
         while ((paragraphMatch = paragraphRegex.exec(articleBody)) !== null) {
-          paragraphs.push(sanitizeText(paragraphMatch[1]));
+          // Clean each paragraph individually to ensure no promotional content
+          const cleanParagraph = paragraphMatch[1]
+            .replace(/یورونیوز در «سرخط خبرها» مهم‌ترین رویدادهای ایران و جهان را در دو نوبت مرور می‌کند.*/g, "")
+            .replace(/«مجله شامگاهی» برنامه‌ای تصویری از یورونیوز است که هر شب.*/g, "")
+            .replace(/«سرخط خبرها» مجموعه‌ای است که یورونیوز [^\.]*\./g, "")
+            .replace(/در این قسمت مهم‌ترین عناوین خبری.*/g, "")
+            .replace(/یورونیوز فارسی را در .* دنبال کنید/g, "")
+            .replace(/یورونیوز فارسی \/ .*/g, "");
+          
+          // Only add non-empty paragraphs after cleaning
+          if (cleanParagraph && cleanParagraph.trim().length > 0) {
+            const sanitizedParagraph = sanitizeText(cleanParagraph);
+            if (sanitizedParagraph && sanitizedParagraph.trim().length > 0) {
+              paragraphs.push(sanitizedParagraph);
+            }
+          }
         }
         
+        // Join paragraphs with double line breaks for better readability
         content = paragraphs.join("\n\n");
         
-        const imgMatch = /<img[^>]+src="([^">]+)"[^>]*class="[^"]*c-article-media__img[^"]*"[^>]*>/i.exec(html);
-        if (imgMatch) {
-          image = imgMatch[1];
-        } else {
-          const metaImgMatch = /<meta[^>]+property="og:image"[^>]+content="([^">]+)"[^>]*>/i.exec(html);
-          if (metaImgMatch) {
-            image = metaImgMatch[1];
+        // Find the best image from various selectors
+        const imgSelectors = [
+          /<meta[^>]+property="og:image"[^>]+content="([^">]+)"[^>]*>/i,
+          /<img[^>]+src="([^">]+)"[^>]*class="[^"]*c-article-media__img[^"]*"[^>]*>/i,
+          /<img[^>]+data-src="([^">]+)"[^>]*class="[^"]*u-media-enlarge__img[^"]*"[^>]*>/i,
+          /<img[^>]+src="([^">]+)"[^>]*class="[^"]*article__img[^"]*"[^>]*>/i
+        ];
+        
+        for (const selector of imgSelectors) {
+          const match = selector.exec(html);
+          if (match) {
+            image = match[1];
+            break;
           }
         }
       }
@@ -1289,6 +1333,7 @@ async function processFeeds(env) {
     let successCount = 0;
     let failureCount = 0;
     let duplicateCount = 0;
+    let filteredCount = 0;
     const processedIdentifiers = new Set();
     
     for (const feed of RSS_FEEDS) {
@@ -1298,6 +1343,17 @@ async function processFeeds(env) {
         console.log(`${latestPosts.length} پست از ${feed.source} یافت شد`);
         
         for (const post of latestPosts) {
+          // Filter out Euronews promotional posts
+          if (feed.source === "Euronews Persian" &&
+              (post.title.includes("سرخط خبرها") || 
+               post.title.includes("مجله شامگاهی") ||
+               (post.description && post.description.includes("یورونیوز در «سرخط خبرها» مهم‌ترین رویدادهای ایران و جهان را در دو نوبت مرور می‌کند")) ||
+               (post.description && post.description.includes("مجله شامگاهی» برنامه‌ای تصویری از یورونیوز است که هر شب")))) {
+            console.log(`پست "${post.title}" از پست‌های تبلیغاتی یورونیوز است، نادیده گرفتن...`);
+            filteredCount++;
+            continue;
+          }
+          
           const uniqueIdentifier = generatePostIdentifier(post);
           
           if (processedIdentifiers.has(uniqueIdentifier)) {
@@ -1399,7 +1455,7 @@ async function processFeeds(env) {
       console.error(`Error cleaning up old posts: ${error.message}`);
     }
     
-    console.log(`پردازش با موفقیت به پایان رسید. ${successCount} پست ارسال شد. ${failureCount} خطا رخ داد. ${duplicateCount} پست تکراری شناسایی شد.`);
+    console.log(`پردازش با موفقیت به پایان رسید. ${successCount} پست ارسال شد. ${failureCount} خطا رخ داد. ${duplicateCount} پست تکراری شناسایی شد. ${filteredCount} پست تبلیغاتی فیلتر شد.`);
   } catch (error) {
     console.error(`خطا در پردازش: ${error.message}`);
   }
