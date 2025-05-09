@@ -1,7 +1,7 @@
 name = "ramznewsofficial"
 main = "src/index.js"
 compatibility_date = "2023-11-01"
-node_compat = true
+nodejs_compat = true
 
 # Set up KV namespace for tracking posts
 kv_namespaces = [

@@ -829,7 +829,7 @@ async function sendTelegramPost(post, env) {
     const channelLink = `\n\n@ramznewsofficial`;
     
     // Generate hashtags using the new function
-    const hashtags = extractHashtags(post);
+    let hashtags = extractHashtags(post);
     
     // ⭐️ تغییر مهم: محاسبه حداکثر طول پیام براساس نوع محتوا
     // برای اخبار فوری طول متن کمتر ولی با اولویت ارسال بالاتر
