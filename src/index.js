@@ -9,20 +9,22 @@ const RSS_FEEDS = [
   { url: "https://feeds.bbci.co.uk/persian/rss.xml", source: "BBC Persian", category: "general", priority: "high" },
   { url: "https://rss.dw.com/xml/rss-per-all_volltext", source: "DW Persian", category: "general", priority: "high" },
   { url: "https://parsi.euronews.com/rss", source: "Euronews Persian", category: "general", priority: "high" },
+  { url: "https://per.mehrnews.com/rss", source: "Mehr News", category: "general", priority: "high" },
+  { url: "https://www.irna.ir/rss/tp/30", source: "IRNA Politics", category: "politics", priority: "high" },
+  { url: "https://www.irna.ir/rss/tp/20", source: "IRNA World", category: "politics", priority: "high" },
   
   // فیدهای تخصصی اقتصادی (اولویت دوم)
   { url: "https://tejaratnews.com/feed/", source: "Tejarat News", category: "finance", priority: "medium" },
+  { url: "https://www.eghtesadnews.com/fa/feeds/1/3", source: "Eghtesad News", category: "finance", priority: "medium" },
+  { url: "https://www.irna.ir/rss/tp/10", source: "IRNA Economy", category: "finance", priority: "medium" },
+  { url: "https://www.tgju.org/rss/news", source: "TGJU", category: "finance", priority: "medium" },
   
   // فیدهای تخصصی کریپتویی (اولویت سوم)
   { url: "https://crypto.asriran.com/feed/", source: "Crypto Asriran", category: "crypto", priority: "low" },
   { url: "https://ramzarz.news/feed/", source: "Ramzarz News", category: "crypto", priority: "low" },
-  
-  // فیدهای جدید کریپتویی (اولویت سوم)
   { url: "https://arzdigital.com/breaking/feed/", source: "Arz Digital Breaking", category: "crypto", priority: "low" },
   { url: "https://nobitex.ir/mag/feed/", source: "Nobitex Mag", category: "crypto", priority: "low" },
   { url: "https://zoomarz.com/feed", source: "Zoomarz", category: "crypto", priority: "low" },
-  
-  // فیدهای بلاکچینی فارسی (اولویت سوم)
   { url: "https://coiniran.com/feed/", source: "Coin Iran", category: "crypto", priority: "low" },
   { url: "https://blockchainiran.com/feed/", source: "Blockchain Iran", category: "crypto", priority: "low" }
 ];
@@ -290,6 +292,9 @@ function extractHashtags(post) {
         source === "Tejarat News" || 
         source === "Ramzarz News" || 
         source === "Arz Digital" || 
+        source === "Eghtesad News" ||
+        source === "TGJU" ||
+        source === "IRNA Economy" ||
         fullText.includes("ارز دیجیتال") || 
         fullText.includes("بیت کوین") || 
         fullText.includes("بلاک چین") || 
@@ -298,19 +303,12 @@ function extractHashtags(post) {
       return "finance";
     }
     
-    // Check for tech content - include IT Iran
-    if (
-        fullText.includes("فناوری") || 
-        fullText.includes("تکنولوژی") || 
-        fullText.includes("هوش مصنوعی") || 
-        fullText.includes("اینترنت") || 
-        fullText.includes("ai") || 
-        fullText.includes("دیجیتال")) {
-      return "tech";
-    }
-    
     // Check for political content
-    const politicalTerms = ["مذاکره", "سیاست", "دولت", "وزیر", "مجلس", "رئیس جمهور", "خامنه‌ای", "رهبر", "انتخابات"];
+    const politicalTerms = [
+      "مذاکره", "سیاست", "دولت", "وزیر", "مجلس", "رئیس جمهور", "خامنه‌ای", "رهبر", 
+      "انتخابات", "تحریم", "دیپلماسی", "سفیر", "سازمان ملل", "شورای امنیت", 
+      "کنگره", "پارلمان", "حزب", "سنا", "احضار", "دیپلمات"
+    ];
     if (politicalTerms.some(term => fullText.includes(term))) {
       return "politics";
     }
@@ -321,8 +319,20 @@ function extractHashtags(post) {
       return "international";
     }
     
+    // تشخیص محتوای اقتصادی
+    const economicTerms = [
+      "اقتصاد", "بورس", "بانک", "دلار", "یورو", "ارز", "طلا", "سکه", "بازار",
+      "تورم", "رکود", "قیمت", "معاملات", "سهام", "صادرات", "واردات"
+    ];
+    if (economicTerms.some(term => fullText.includes(term))) {
+      return "economy";
+    }
+    
+    // حذف دسته "tech" که ممکن است باعث هشتگ‌های نامرتبط شود
+    
     // Default
-    return "news";
+    return source === "BBC Persian" || source === "DW Persian" || source === "Euronews Persian" || source === "Mehr News" || source === "IRNA Politics" || source === "IRNA World" ? 
+      "news" : "general";
   };
   
   // Common Persian stop words to exclude
@@ -347,7 +357,8 @@ function extractHashtags(post) {
       "ایران", "آمریکا", "روسیه", "چین", "فرانسه", "آلمان", "انگلستان", "بریتانیا", 
       "ترکیه", "ایتالیا", "عراق", "سوریه", "لبنان", "فلسطین", "اسرائیل", "افغانستان", 
       "پاکستان", "هند", "ژاپن", "کره", "کانادا", "ونزوئلا", "برزیل", "ارمنستان", 
-      "آذربایجان", "مصر", "عربستان", "امارات", "قطر", "کویت", "عمان", "بحرین"
+      "آذربایجان", "مصر", "عربستان", "امارات", "قطر", "کویت", "عمان", "بحرین",
+      "اوکراین", "دانمارک", "سوئد", "نروژ", "اسپانیا", "پرتغال", "یونان"
     ],
     // Organization names
     organizations: [
@@ -368,18 +379,7 @@ function extractHashtags(post) {
     politics: [
       "رئیس‌جمهور", "مجلس", "نماینده", "وزیر", "دولت", "انتخابات", "رهبر", "سیاست", 
       "گفتگو", "مذاکره", "دیپلماسی", "سیاسی", "پارلمان", "حزب", "جمهوری", "دموکرات", 
-      "سنا", "کنگره", "رأی", "تحریم"
-    ],
-    // Technology terms
-    tech: [
-      "فناوری", "تکنولوژی", "هوش مصنوعی", "اینترنت", "کلود", "AI", "هوشمند", "اپلیکیشن",
-      "دیجیتال", "نرم‌افزار", "سخت‌افزار", "سایبری", "امنیت", "پلتفرم", "داده", "اپل",
-      "گوگل", "مایکروسافت", "تلگرام"
-    ],
-    // Social media terms
-    social: [
-      "اینستاگرام", "توییتر", "فیسبوک", "تلگرام", "پیام‌رسان", "واتساپ", "یوتیوب",
-      "تیک‌تاک", "توییت", "پست", "فالوور", "شبکه اجتماعی", "لایک"
+      "سنا", "کنگره", "رأی", "تحریم", "سفیر", "دیپلمات", "بیانیه", "لایحه", "حکم"
     ]
   };
   
@@ -395,7 +395,8 @@ function extractHashtags(post) {
     // Check for each named entity type
     Object.keys(namedEntityPatterns).forEach(entityType => {
       namedEntityPatterns[entityType].forEach(entity => {
-        if (text.includes(entity)) {
+        const entityRegex = new RegExp(`\\b${entity}\\b`, 'i');
+        if (entityRegex.test(text)) {
           entities.push(entity.replace(/\s+/g, "_"));
         }
       });
@@ -454,18 +455,55 @@ function extractHashtags(post) {
   // Default hashtags based on category
   const defaultHashtags = [];
   
-  // Category-specific hashtags
-  if (category === "finance" || post.source === "Crypto Asriran" || post.source === "Tejarat News") {
-    defaultHashtags.push("ارز_دیجیتال", "بیت_کوین", "اقتصاد");
+  // Category-specific hashtags - only include 1-2 default hashtags to avoid irrelevancy
+  if (category === "finance" || category === "economy" || post.source === "Tejarat News" || post.source === "TGJU" || post.source === "IRNA Economy" || post.source === "Eghtesad News") {
+    // بررسی اگر کلمات خاص اقتصادی در متن وجود دارند
+    if (title.includes("ارز") || content.includes("ارز")) defaultHashtags.push("ارز");
+    if (title.includes("بورس") || content.includes("بورس")) defaultHashtags.push("بورس");
+    if (title.includes("اقتصاد") || content.includes("اقتصاد")) defaultHashtags.push("اقتصاد");
+    if (title.includes("بانک") || content.includes("بانک")) defaultHashtags.push("بانک");
+    
+    // اگر هیچ کلمه خاصی نبود، فقط یک هشتگ کلی اضافه کنیم
+    if (defaultHashtags.length === 0) defaultHashtags.push("اقتصاد");
+  } else if (category === "crypto" || post.source.includes("Crypto") || post.source.includes("Coin") || post.source.includes("Arz")) {
+    // بررسی اگر کلمات خاص رمزارزی در متن وجود دارند
+    if (title.includes("بیت کوین") || content.includes("بیت کوین")) defaultHashtags.push("بیت_کوین");
+    if (title.includes("رمزارز") || content.includes("رمزارز")) defaultHashtags.push("رمزارز");
+    
+    // اگر هیچ کلمه خاصی نبود، فقط یک هشتگ کلی اضافه کنیم
+    if (defaultHashtags.length === 0) defaultHashtags.push("رمزارز");
   } else if (category === "politics") {
-    defaultHashtags.push("سیاست", "ایران", "اخبار");
+    // محتوای سیاسی - بررسی کلمات کلیدی
+    if (title.includes("ایران") || content.includes("ایران")) defaultHashtags.push("ایران");
+    if (title.includes("آمریکا") || content.includes("آمریکا")) defaultHashtags.push("آمریکا");
+    if (title.includes("انتخابات") || content.includes("انتخابات")) defaultHashtags.push("انتخابات");
+    if (title.includes("مذاکره") || content.includes("مذاکره")) defaultHashtags.push("مذاکره");
+    if (title.includes("تحریم") || content.includes("تحریم")) defaultHashtags.push("تحریم");
+    if (title.includes("دولت") || content.includes("دولت")) defaultHashtags.push("دولت");
+    
+    // اگر هیچ کلمه خاصی نبود، فقط یک هشتگ کلی اضافه کنیم
+    if (defaultHashtags.length === 0) defaultHashtags.push("سیاست");
   } else if (category === "international") {
-    defaultHashtags.push("جهان", "بین_الملل", "اخبار");
-  } else if (category === "tech") {
-    defaultHashtags.push("فناوری", "تکنولوژی", "دیجیتال");
+    // اخبار بین‌المللی - بررسی کلمات کلیدی
+    const countries = namedEntityPatterns.countries;
+    let countryFound = false;
+    
+    for (const country of countries) {
+      const countryRegex = new RegExp(`\\b${country}\\b`, 'i');
+      if (countryRegex.test(title) || countryRegex.test(content)) {
+        defaultHashtags.push(country);
+        countryFound = true;
+        // محدود کردن به حداکثر 2 کشور
+        if (defaultHashtags.length >= 2) break;
+      }
+    }
+    
+    // اگر هیچ کشوری نبود، هشتگ کلی
+    if (!countryFound) defaultHashtags.push("بین_الملل");
   } else {
-    // Default news hashtags
-    defaultHashtags.push("اخبار", "ایران", "جهان");
+    // اخبار عمومی - بررسی محتوا
+    if (text.includes("ایران")) defaultHashtags.push("ایران");
+    if (text.includes("اخبار")) defaultHashtags.push("اخبار");
   }
   
   // Combine all hashtag types, removing duplicates
@@ -479,19 +517,47 @@ function extractHashtags(post) {
   // Score and prioritize hashtags
   const scoreHashtag = (hashtag) => {
     let score = 0;
-    // Named entities get highest priority
-    if (namedEntities.includes(hashtag)) score += 100;
+    
+    // بررسی اگر هشتگ در عنوان وجود دارد (امتیاز بالا)
+    const hashtagRegex = new RegExp(`\\b${hashtag.replace(/_/g, "[_ ]")}\\b`, 'i');
+    if (hashtagRegex.test(title)) {
+      score += 100;
+    } else if (hashtagRegex.test(content.substring(0, 200))) {
+      // اگر در 200 کاراکتر اول محتوا باشد
+      score += 80;
+    } else if (hashtagRegex.test(content)) {
+      // اگر در ادامه محتوا باشد
+      score += 50;
+    }
+    
+    // Named entities get high priority
+    if (namedEntities.includes(hashtag)) score += 90;
     // Phrases from title get next priority
-    if (phraseHashtags.includes(hashtag)) score += 80;
+    if (phraseHashtags.includes(hashtag)) score += 70;
     // Top frequency words get scores based on frequency
     const freq = wordFrequency[hashtag] || 0;
     score += freq * 5;
-    // Default hashtags get a small boost
-    if (defaultHashtags.includes(hashtag)) score += 10;
+    // Default hashtags get a small boost if they're actually in the content
+    if (defaultHashtags.includes(hashtag)) {
+      if (hashtagRegex.test(title) || hashtagRegex.test(content)) {
+        score += 30;
+      } else {
+        score += 10; // کمتر اگر در متن نیست
+      }
+    }
     
     // Length bonus/penalty - not too short, not too long
-    if (hashtag.length < 5) score -= 20;
-    if (hashtag.length > 20) score -= 30;
+    if (hashtag.length < 3) score -= 50; // قویاً رد کردن هشتگ‌های خیلی کوتاه
+    if (hashtag.length > 20) score -= 40; // قویاً رد کردن هشتگ‌های خیلی بلند
+    if (hashtag.length > 12) score -= 20;
+    
+    // اگر هشتگ نامربوط تشخیص داده شود، امتیاز منفی جدی
+    const irrelevantHashtags = ["هند", "پاکستان", "طلا", "نفت", "گاز"];
+    
+    // اگر هشتگ در لیست نامربوط‌ها باشد و در متن اصلی نباشد، امتیاز منفی
+    if (irrelevantHashtags.includes(hashtag) && !hashtagRegex.test(title) && !hashtagRegex.test(content.substring(0, 500))) {
+      score -= 500; // امتیاز منفی شدید
+    }
     
     return score;
   };
@@ -1979,6 +2045,106 @@ function evaluateContentQuality(post) {
       };
     }
 
+    // ⭐️ فیلتر جدید: رد کردن مطالب نامرتبط با موضوع اصلی کانال
+    // لیست موضوعات ممنوعه و غیرمرتبط با کانال
+    const prohibitedTopics = [
+      // محصولات و کالاهای مصرفی
+      "لوازم آرایش", "آرایشی", "آرایش", "لاک", "رژ لب", "فاندیشن", "ریمل", "کرم", "شامپو", 
+      "لوسیون", "مراقبت پوست", "اسکراب", "مرطوب کننده", "ضد آفتاب", "ماسک صورت",
+      
+      // غذا و نوشیدنی
+      "دستور پخت", "آشپزی", "رستوران", "پیتزا", "فست فود", "غذاخوری", "کافه", "کافی شاپ",
+      "نوشیدنی", "دسر", "شیرینی", "کیک", "بستنی", "طرز تهیه",
+      
+      // مد و لباس
+      "لباس", "پوشاک", "کفش", "کیف", "اکسسوری", "زیورآلات", "مد", "فشن", "استایل", "طراحی لباس",
+      
+      // سرگرمی غیرمرتبط
+      "بازی", "سینما", "فیلم", "موسیقی", "کنسرت", "تفریح", "سرگرمی", "بازیگر", "خواننده", 
+      "هنرمند", "هنرپیشه", "شوی تلویزیونی", "سریال",
+      
+      // ورزش و تناسب اندام
+      "فوتبال", "والیبال", "بسکتبال", "تناسب اندام", "فیتنس", "بدنسازی", "یوگا", "ایروبیک",
+      "باشگاه", "ورزشگاه", "استادیوم", "مسابقه", "لیگ", "جام", "دوپینگ", "مدال", "قهرمانی",
+      
+      // سلامت غیرمرتبط
+      "سلامت", "بیماری", "درمان", "دارو", "مکمل", "ویتامین", "رژیم غذایی", "لاغری", "چاقی",
+      "پزشک", "دندانپزشک", "روانشناس", "داروخانه",
+      
+      // موارد دیگر
+      "توصیه", "چگونه", "آموزش", "ترفند", "راهنمای", "نحوه"
+    ];
+    
+    // بررسی عنوان و محتوا برای موضوعات ممنوعه
+    for (const topic of prohibitedTopics) {
+      // بررسی دقیق‌تر با درنظر گرفتن اینکه کلمه به تنهایی در متن باشد (نه بخشی از یک کلمه دیگر)
+      const topicRegex = new RegExp(`\\b${topic}\\b`, 'i');
+      
+      if (topicRegex.test(post.title) || topicRegex.test(post.description)) {
+        // بررسی اینکه آیا این موضوع ممنوعه در یک بافت سیاسی یا اقتصادی مهم به کار رفته است
+        // مثلاً "تحریم دارو" موضوعی سیاسی است، نه پزشکی
+        const hasPoliticalContext = (
+          post.title.includes("تحریم") || 
+          post.title.includes("سیاست") || 
+          post.title.includes("دولت") || 
+          post.title.includes("وزیر") ||
+          post.title.includes("قانون") ||
+          post.title.includes("مجلس") ||
+          post.title.includes("رئیس جمهور")
+        );
+        
+        const hasEconomicContext = (
+          post.title.includes("اقتصاد") || 
+          post.title.includes("بازار") || 
+          post.title.includes("ارز") || 
+          post.title.includes("تورم") ||
+          post.title.includes("بانک") ||
+          post.title.includes("قیمت") ||
+          post.title.includes("بورس")
+        );
+        
+        // اگر بافت سیاسی یا اقتصادی نداشت، پست را رد کنیم
+        if (!hasPoliticalContext && !hasEconomicContext) {
+          console.log(`پست "${post.title}" به دلیل موضوع نامرتبط "${topic}" رد شد`);
+          return {
+            isHighQuality: false,
+            reason: `موضوع نامرتبط با کانال (${topic})`
+          };
+        }
+      }
+    }
+
+    // ⭐️ فیلتر جدید: افزایش کیفیت هشتگ‌های انتخابی
+    // بررسی ناسازگاری بین عنوان و هشتگ‌ها (مشکل کلاسیک محتوای زرد)
+    if (post.title) {
+      const irrelevantHashtags = [
+        "هند", "پاکستان", "چین", "روسیه", "آمریکا", "طلا", "نفت", "گاز", 
+        "سیاست", "وزیر", "انتخابات", "اقتصاد", "ارز", "دلار"
+      ];
+      
+      let hasMismatchingHashtags = false;
+      
+      for (const hashtag of irrelevantHashtags) {
+        const hashtagRegex = new RegExp(`\\b${hashtag}\\b`, 'i');
+        
+        // اگر هشتگ در عنوان نیست اما در متن هشتگ استفاده شده، این یک ناسازگاری است
+        if (!hashtagRegex.test(post.title) && 
+            !hashtagRegex.test(post.description && post.description.substring(0, 200)) && 
+            post.hashtags && post.hashtags.includes(hashtag)) {
+          hasMismatchingHashtags = true;
+          console.log(`پست "${post.title}" دارای هشتگ نامرتبط "${hashtag}" است`);
+        }
+      }
+      
+      if (hasMismatchingHashtags) {
+        console.log(`پست "${post.title}" به دلیل هشتگ‌های نامرتبط رد شد`);
+        return {
+          isHighQuality: false,
+          reason: "هشتگ‌های نامرتبط با محتوا"
+        };
+      }
+    }
+
     // ابتدا اولویت‌های کانال را بررسی کنیم
     // شناسایی محتوای مرتبط با اولویت‌های کانال (سیاست، اقتصاد، رمزارز) به ترتیب اولویت
     const priorityKeywords = {
@@ -2047,9 +2213,10 @@ function evaluateContentQuality(post) {
       post.source.includes("Blockchain")
     );
     
+    // ⭐️ تغییر مهم: افزایش آستانه امتیاز برای مطالب غیرمرتبط و عدم ارتباط با اولویت‌ها
     // اگر محتوا با هیچ یک از اولویت‌های کانال مرتبط نیست و از منابع کریپتویی هم نیست، آن را رد کنیم
-    if (priorityScore < 3 && !categoryFound && !isCryptoSource) {
-      console.log(`پست "${post.title}" به دلیل عدم ارتباط کافی با اولویت‌های کانال رد شد`);
+    if (priorityScore < 5 && !categoryFound && !isCryptoSource) {
+      console.log(`پست "${post.title}" به دلیل عدم ارتباط کافی با اولویت‌های کانال رد شد (امتیاز: ${priorityScore})`);
       return { 
         isHighQuality: false, 
         reason: "عدم ارتباط با اولویت‌های کانال" 
