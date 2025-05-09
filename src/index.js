@@ -774,9 +774,44 @@ async function sendTelegramPost(post, env) {
         .replace(/\n{3,}/g, "\n\n");
     }
     
-    // محتوا را به درستی پاکسازی کنیم
+    // بررسی برای تشخیص متن ساختاریافته (مانند ساعت کاری)
+    const hasStructuredContent = 
+      (post.title && (
+        post.title.includes("ساعت کاری") || 
+        post.title.includes("زمان کار") || 
+        post.title.includes("ساعات اداری")
+      )) || 
+      (post.description && (
+        post.description.includes("ساعت کاری") ||
+        post.description.includes("ساعت ورود") ||
+        post.description.includes("ساعت خروج") ||
+        post.description.includes("به شرح زیر") ||
+        post.description.includes("از ساعت") ||
+        post.description.includes("تا ساعت")
+      ));
+    
+    // پاکسازی متفاوت برای محتوای ساختاریافته
     const cleanTitle = post.title ? sanitizeText(post.title) : "";
-    let cleanDescription = post.description ? sanitizeText(post.description) : "";
+    let cleanDescription;
+    
+    if (hasStructuredContent) {
+      // حفظ خط‌های جدید و ساختار متن در محتوای ساختاریافته
+      cleanDescription = post.description ? 
+        post.description
+          .replace(/<br\s*\/?>/gi, "\n")
+          .replace(/<p[^>]*>(.*?)<\/p>/gi, "$1\n\n")
+          .replace(/<li[^>]*>(.*?)<\/li>/gi, "• $1\n")
+          .replace(/<ul[^>]*>|<\/ul>|<ol[^>]*>|<\/ol>/gi, "\n")
+          .replace(/<[^>]*>/g, "")
+          .replace(/&nbsp;/g, " ")
+          .replace(/&zwnj;/g, " ")
+          .replace(/&[a-zA-Z0-9]+;/g, " ")
+          .replace(/\n{3,}/g, "\n\n")
+          .trim() : "";
+    } else {
+      // استفاده از پاکسازی معمولی برای محتوای غیر ساختاریافته
+      cleanDescription = post.description ? sanitizeText(post.description) : "";
+    }
     
     // حذف عنوان از محتوا برای جلوگیری از تکرار
     if (cleanTitle && cleanDescription) {
