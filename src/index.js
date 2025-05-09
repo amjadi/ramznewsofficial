@@ -775,8 +775,23 @@ async function sendTelegramPost(post, env) {
     }
     
     // محتوا را به درستی پاکسازی کنیم
-    const cleanDescription = post.description ? sanitizeText(post.description) : "";
     const cleanTitle = post.title ? sanitizeText(post.title) : "";
+    let cleanDescription = post.description ? sanitizeText(post.description) : "";
+    
+    // حذف عنوان از محتوا برای جلوگیری از تکرار
+    if (cleanTitle && cleanDescription) {
+        // حذف عنوان دقیقاً مشابه از انتهای محتوا
+        if (cleanDescription.endsWith(cleanTitle + ".")) {
+            cleanDescription = cleanDescription.substring(0, cleanDescription.length - cleanTitle.length - 1).trim();
+        } else if (cleanDescription.endsWith(cleanTitle)) {
+            cleanDescription = cleanDescription.substring(0, cleanDescription.length - cleanTitle.length).trim();
+        }
+        
+        // حذف عنوان از هر جای متن
+        const titleEscaped = cleanTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const titleRegex = new RegExp(`${titleEscaped}\\.?$`, 'g');
+        cleanDescription = cleanDescription.replace(titleRegex, '').trim();
+    }
     
     // بررسی وجود تصویر معتبر و بدون لوگو
     let validImage = null;
