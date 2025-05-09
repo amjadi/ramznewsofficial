@@ -774,12 +774,23 @@ async function sendTelegramPost(post, env) {
         .replace(/\n{3,}/g, "\n\n");
     }
     
-    // بررسی برای تشخیص متن ساختاریافته (مانند ساعت کاری)
+    // بررسی برای تشخیص متن ساختاریافته (مانند ساعت کاری یا اخبار)
     const hasStructuredContent = 
       (post.title && (
         post.title.includes("ساعت کاری") || 
         post.title.includes("زمان کار") || 
-        post.title.includes("ساعات اداری")
+        post.title.includes("ساعات اداری") ||
+        // کلمات کلیدی اخبار
+        post.title.includes("آمریکا") ||
+        post.title.includes("ایران") ||
+        post.title.includes("وزیر") ||
+        post.title.includes("دولت") ||
+        post.title.includes("مذاکره") ||
+        post.title.includes("انتخابات") ||
+        post.title.includes("احضار") ||
+        post.title.includes("سفیر") ||
+        post.title.includes("دیپلمات") ||
+        post.title.includes("رئیس جمهور")
       )) || 
       (post.description && (
         post.description.includes("ساعت کاری") ||
@@ -787,7 +798,13 @@ async function sendTelegramPost(post, env) {
         post.description.includes("ساعت خروج") ||
         post.description.includes("به شرح زیر") ||
         post.description.includes("از ساعت") ||
-        post.description.includes("تا ساعت")
+        post.description.includes("تا ساعت") ||
+        // تشخیص ساختار خبری
+        (post.description.includes("گفت:") && post.description.includes("وزیر")) ||
+        (post.description.includes("گفت:") && post.description.includes("رئیس جمهور")) ||
+        (post.description.includes("اعلام کرد") && post.description.length > 300) ||
+        (post.description.includes("خبرگزاری") && post.description.length > 300) ||
+        (post.description.includes("روز") && post.description.includes("اعلام"))
       ));
     
     // پاکسازی متفاوت برای محتوای ساختاریافته
@@ -886,7 +903,7 @@ async function sendTelegramPost(post, env) {
     let maxLength = 3900; // مقدار پیش‌فرض
     
     if (validImage) {
-      maxLength = isBreakingNews ? 1000 : 900; // محدودیت برای پست‌های با تصویر
+      maxLength = isBreakingNews ? 2000 : 2500; // افزایش محدودیت برای پست‌های با تصویر
     } else if (isBreakingNews || isShortNews) {
       maxLength = 3000; // برای اخبار کوتاه، محدودیت کمتر
     }
@@ -903,8 +920,25 @@ async function sendTelegramPost(post, env) {
       const paragraphs = cleanDescription.split(/\n\n+/);
       let currentLength = 0;
       
-      // ⭐️ تغییر مهم: برای اخبار فوری یا کوتاه، ترجیحاً فقط یک یا دو پاراگراف اول را نمایش دهیم
-      const maxParagraphs = isBreakingNews || isShortNews ? 2 : paragraphs.length;
+      // ⭐️ تغییر مهم: برای خبرهای سیاسی و مهم، حداقل ۳ پاراگراف را نمایش دهیم
+      // شناسایی خبرهای سیاسی مهم
+      const isPoliticalNews = (
+        post.title && (
+          post.title.includes("آمریکا") || 
+          post.title.includes("ایران") ||
+          post.title.includes("رئیس جمهور") ||
+          post.title.includes("وزیر") ||
+          post.title.includes("دولت") ||
+          post.title.includes("مذاکره") ||
+          post.title.includes("انتخابات")
+        )
+      );
+      
+      // تعیین حداکثر تعداد پاراگراف‌ها براساس نوع خبر
+      const maxParagraphs = isPoliticalNews ? 
+                            Math.min(5, paragraphs.length) : 
+                            (isBreakingNews || isShortNews) ? 3 : 
+                            paragraphs.length;
       
       for (let i = 0; i < Math.min(maxParagraphs, paragraphs.length); i++) {
         const paragraph = paragraphs[i];
