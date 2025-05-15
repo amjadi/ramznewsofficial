@@ -638,15 +638,17 @@ async function isContentDuplicate(post, env) {
       return false;
     }
 
-    // بهبود: تبدیل همه متن‌ها به حروف کوچک و حذف کاراکترهای اضافی
+    // بهبود: تمیزسازی و نرمال‌سازی متن‌ها
     const cleanTitle = post.title
       .replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
-      .trim();
+      .trim()
+      .toLowerCase(); // تبدیل به حروف کوچک برای مقایسه بهتر
     
     const cleanDescription = post.description
       .replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
-      .substring(0, 300) // فقط 300 کاراکتر اول را بررسی می‌کنیم
-      .trim();
+      .substring(0, 500) // افزایش به 500 کاراکتر برای تشخیص بهتر
+      .trim()
+      .toLowerCase();
 
     // استخراج کلیدواژه‌های مهم از عنوان
     const titleWords = cleanTitle
@@ -657,15 +659,15 @@ async function isContentDuplicate(post, env) {
     const descWords = cleanDescription
       .split(/\s+/)
       .filter((word) => word.length > 3)
-      .slice(0, 15); // 15 کلمه اول
+      .slice(0, 20); // افزایش به 20 کلمه برای مقایسه دقیق‌تر
 
     // بدون کلمات کلیدی کافی نمی‌توان مقایسه کرد
-    if (titleWords.length < 3 && descWords.length < 5) {
+    if (titleWords.length < 2 && descWords.length < 4) {
       return false;
     }
 
-    // افزایش تعداد پست‌های بررسی شده به 200
-    const keys = await env.POST_TRACKER.list({ limit: 200 });
+    // بررسی 300 پست اخیر برای تشخیص دقیق‌تر
+    const keys = await env.POST_TRACKER.list({ limit: 300 });
     if (!keys || !keys.keys || keys.keys.length === 0) {
       return false;
     }
@@ -678,10 +680,14 @@ async function isContentDuplicate(post, env) {
       post.source.includes("Tejarat")
     );
     
-    // آستانه‌های متفاوت براساس نوع منبع
-    const titleThreshold = isCryptoSource ? 0.8 : 0.7;  // 80% برای کریپتو و 70% برای بقیه
-    const descThreshold = isCryptoSource ? 0.6 : 0.5;   // 60% برای کریپتو و 50% برای بقیه
+    // برای اخبار مهم و فوری آستانه را بالاتر می‌بریم تا به اشتباه فیلتر نشوند
+    const isHighPriority = post.isBreakingNews || post.isHighPriorityContent;
+    
+    // آستانه‌های متفاوت براساس نوع منبع و اهمیت خبر
+    const titleThreshold = isHighPriority ? 0.85 : isCryptoSource ? 0.75 : 0.65;
+    const descThreshold = isHighPriority ? 0.70 : isCryptoSource ? 0.55 : 0.45;
 
+    // استفاده از استراتژی‌های مختلف برای تشخیص تکراری
     for (const key of keys.keys) {
       try {
         const storedValueStr = await env.POST_TRACKER.get(key.name);
@@ -698,13 +704,28 @@ async function isContentDuplicate(post, env) {
           const storedTitle = storedValue.data.title || "";
           const storedSource = storedValue.data.source || "";
           
-          // برای فیدهای کریپتو فقط با فیدهای کریپتو مقایسه کنیم
-          if (isCryptoSource && !(
+          // اگر منبع یکسان و زمان ارسال کمتر از 48 ساعت است، حتی با عناوین متفاوت هم دقت بیشتری به خرج دهیم
+          const isSameSource = post.source === storedSource;
+          let isRecentFromSameSource = false;
+          
+          if (isSameSource && storedValue.sentAt) {
+            const sentTime = new Date(storedValue.sentAt).getTime();
+            const currentTime = new Date().getTime();
+            const hoursDiff = (currentTime - sentTime) / (1000 * 60 * 60);
+            isRecentFromSameSource = hoursDiff < 48;
+          }
+          
+          // اگر از یک منبع در 48 ساعت گذشته پست مشابه داشته‌ایم، آستانه را پایین‌تر بیاوریم
+          const adjustedTitleThreshold = isRecentFromSameSource ? titleThreshold * 0.85 : titleThreshold;
+          
+          // برای فیدهای کریپتو فقط با فیدهای کریپتو مقایسه کنیم (مگر اینکه خبر خیلی مهم باشد)
+          if (isCryptoSource && !isHighPriority && !(
             storedSource.includes("Crypto") || 
             storedSource.includes("Ramzarz") || 
             storedSource.includes("Arz Digital") ||
-            storedSource.includes("Tejarat"))
-          ) {
+            storedSource.includes("Tejarat") ||
+            storedSource.includes("Coin")
+          )) {
             continue;
           }
           
@@ -712,9 +733,10 @@ async function isContentDuplicate(post, env) {
           if (storedTitle) {
             const cleanStoredTitle = storedTitle
               .replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
-              .trim();
+              .trim()
+              .toLowerCase();
             
-            // بررسی میزان همپوشانی کلمات عنوان
+            // روش 1: بررسی میزان همپوشانی کلمات عنوان
             let titleMatchCount = 0;
             for (const word of titleWords) {
               if (cleanStoredTitle.includes(word)) {
@@ -727,21 +749,27 @@ async function isContentDuplicate(post, env) {
               ? titleMatchCount / titleWords.length
               : 0;
             
-            // اگر عنوان به اندازه کافی مشابه است، تکراری است
-            if (titleMatchPercentage >= titleThreshold && titleWords.length >= 3) {
-              console.log(`محتوای مشابه یافت شد (عنوان): "${storedTitle}" با "${post.title}" - تطابق: ${titleMatchPercentage.toFixed(2)}%`);
+            // روش 2: محاسبه شباهت متنی کلی
+            const titleSimilarity = calculateSimilarity(cleanTitle, cleanStoredTitle);
+            
+            // بررسی انطباق دقیق - اگر عنوان‌ها خیلی شبیه هستند
+            if (titleSimilarity > 0.8 || (titleMatchPercentage >= adjustedTitleThreshold && titleWords.length >= 3)) {
+              console.log(`محتوای مشابه یافت شد (عنوان): "${storedTitle}" با "${post.title}" - تطابق: ${(Math.max(titleSimilarity, titleMatchPercentage) * 100).toFixed(0)}%`);
               return true;
             }
             
-            // بررسی محتوا در صورتی که منبع کریپتو باشد
-            if (isCryptoSource && descWords.length >= 5) {
-              // مقایسه محتوای پست‌ها هم انجام شود
+            // بررسی محتوا برای تشخیص دقیق‌تر
+            if (titleMatchPercentage >= 0.4 || titleSimilarity >= 0.3) { // اگر عنوان تا حدی مشابه است، محتوا را هم بررسی کنیم
               const storedDescription = storedValue.data.description || "";
-              if (storedDescription) {
+              if (storedDescription && cleanDescription) {
                 const cleanStoredDesc = storedDescription
                   .replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
-                  .substring(0, 300)
-                  .trim();
+                  .substring(0, 500)
+                  .trim()
+                  .toLowerCase();
+                
+                // مقایسه محتوا با دو روش
+                const descSimilarity = calculateSimilarity(cleanDescription, cleanStoredDesc);
                 
                 let descMatchCount = 0;
                 for (const word of descWords) {
@@ -754,8 +782,11 @@ async function isContentDuplicate(post, env) {
                   ? descMatchCount / descWords.length
                   : 0;
                 
-                if (descMatchPercentage >= descThreshold) {
-                  console.log(`محتوای مشابه یافت شد (توضیحات): "${storedTitle}" با "${post.title}" - تطابق: ${descMatchPercentage.toFixed(2)}%`);
+                // ترکیب نتایج دو روش برای تشخیص دقیق‌تر
+                const combinedScore = Math.max(descSimilarity, descMatchPercentage) * 0.7 + titleMatchPercentage * 0.3;
+                
+                if (combinedScore >= descThreshold) {
+                  console.log(`محتوای مشابه یافت شد (ترکیبی): "${storedTitle}" با "${post.title}" - تطابق: ${(combinedScore * 100).toFixed(0)}%`);
                   return true;
                 }
               }
@@ -825,7 +856,7 @@ async function markPostAsSent(postIdentifier, env, postData = null) {
 // Telegram posting function
 async function sendTelegramPost(post, env) {
   try {
-    // Special handling for DW Persian content to ensure promotional content is removed
+    // Clean special sources content
     if (post.source === "DW Persian") {
       post.description = post.description
         .replace(/اینترنت بدون سانسور با سایفون دویچه‌ وله/g, "")
@@ -835,7 +866,6 @@ async function sendTelegramPost(post, env) {
         .replace(/\n{3,}/g, "\n\n");
     }
     
-    // Special handling for Euronews Persian content
     if (post.source === "Euronews Persian") {
       post.description = post.description
         .replace(/یورونیوز در «سرخط خبرها» مهم‌ترین رویدادهای ایران و جهان را در دو نوبت مرور می‌کند.*/g, "")
@@ -847,336 +877,289 @@ async function sendTelegramPost(post, env) {
         .replace(/\n{3,}/g, "\n\n");
     }
     
-    // بررسی برای تشخیص متن ساختاریافته (مانند ساعت کاری یا اخبار)
-    const hasStructuredContent = 
-      (post.title && (
-        post.title.includes("ساعت کاری") || 
-        post.title.includes("زمان کار") || 
-        post.title.includes("ساعات اداری") ||
-        // کلمات کلیدی اخبار
-        post.title.includes("آمریکا") ||
-        post.title.includes("ایران") ||
-        post.title.includes("وزیر") ||
-        post.title.includes("دولت") ||
-        post.title.includes("مذاکره") ||
-        post.title.includes("انتخابات") ||
-        post.title.includes("احضار") ||
-        post.title.includes("سفیر") ||
-        post.title.includes("دیپلمات") ||
-        post.title.includes("رئیس جمهور")
-      )) || 
-      (post.description && (
-        post.description.includes("ساعت کاری") ||
-        post.description.includes("ساعت ورود") ||
-        post.description.includes("ساعت خروج") ||
-        post.description.includes("به شرح زیر") ||
-        post.description.includes("از ساعت") ||
-        post.description.includes("تا ساعت") ||
-        // تشخیص ساختار خبری
-        (post.description.includes("گفت:") && post.description.includes("وزیر")) ||
-        (post.description.includes("گفت:") && post.description.includes("رئیس جمهور")) ||
-        (post.description.includes("اعلام کرد") && post.description.length > 300) ||
-        (post.description.includes("خبرگزاری") && post.description.length > 300) ||
-        (post.description.includes("روز") && post.description.includes("اعلام"))
-      ));
-    
-    // پاکسازی متفاوت برای محتوای ساختاریافته
+    // Validate title and content
     const cleanTitle = post.title ? sanitizeText(post.title) : "";
-    let cleanDescription;
+    let cleanDescription = post.description ? sanitizeText(post.description) : "";
     
-    if (hasStructuredContent) {
-      // حفظ خط‌های جدید و ساختار متن در محتوای ساختاریافته
-      cleanDescription = post.description ? 
-        post.description
-          .replace(/<br\s*\/?>/gi, "\n")
-          .replace(/<p[^>]*>(.*?)<\/p>/gi, "$1\n\n")
-          .replace(/<li[^>]*>(.*?)<\/li>/gi, "• $1\n")
-          .replace(/<ul[^>]*>|<\/ul>|<ol[^>]*>|<\/ol>/gi, "\n")
-          .replace(/<[^>]*>/g, "")
-          .replace(/&nbsp;/g, " ")
-          .replace(/&zwnj;/g, " ")
-          .replace(/&[a-zA-Z0-9]+;/g, " ")
-          .replace(/\n{3,}/g, "\n\n")
-          .trim() : "";
-    } else {
-      // استفاده از پاکسازی معمولی برای محتوای غیر ساختاریافته
-      cleanDescription = post.description ? sanitizeText(post.description) : "";
-    }
-    
-    // حذف عنوان از محتوا برای جلوگیری از تکرار
-    if (cleanTitle && cleanDescription) {
-        // حذف عنوان دقیقاً مشابه از انتهای محتوا
-        if (cleanDescription.endsWith(cleanTitle + ".")) {
-            cleanDescription = cleanDescription.substring(0, cleanDescription.length - cleanTitle.length - 1).trim();
-        } else if (cleanDescription.endsWith(cleanTitle)) {
-            cleanDescription = cleanDescription.substring(0, cleanDescription.length - cleanTitle.length).trim();
-        }
-        
-        // حذف عنوان از هر جای متن
-        const titleEscaped = cleanTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const titleRegex = new RegExp(`${titleEscaped}\\.?$`, 'g');
-        cleanDescription = cleanDescription.replace(titleRegex, '').trim();
-    }
-    
-    // بررسی وجود تصویر معتبر و بدون لوگو
-    let validImage = null;
-    
-    if (post.image && isValidUrl(post.image)) {
-      // بررسی و حذف تصاویر احتمالی با لوگو (ممکن است نیاز به سرویس‌های پیشرفته‌تر تشخیص تصویر باشد)
-      const imageLowerCase = post.image.toLowerCase();
-      const suspiciousImageKeywords = [
-        "logo", "watermark", "banner", "header", "footer", "profile", "avatar", 
-        "-logo-", "/logo/", "_logo_", "logotype", "brandlogo", "site-logo", "website-logo"
-      ];
-      
-      const hasSuspiciousKeywords = suspiciousImageKeywords.some(keyword => imageLowerCase.includes(keyword));
-      
-      if (!hasSuspiciousKeywords) {
-        validImage = post.image;
-      } else {
-        console.log(`تصویر "${post.image}" احتمالاً دارای لوگو است و استفاده نمی‌شود`);
-      }
-    }
-    
-    // بررسی عنوان و محتوا
     if (!cleanTitle || cleanTitle.trim().length === 0) {
       console.log("عنوان پست خالی است، پست ارسال نمی‌شود");
       return false;
     }
     
-    // تشخیص اخبار فوری و کوتاه
-    const isBreakingNews = post.isBreakingNews || false;
-    const isShortNews = (post.isNews && cleanDescription.length < 500) || isBreakingNews;
-    
-    if (!isShortNews && (!cleanDescription || cleanDescription.trim().length < 100)) {
-      console.log(`محتوای پست "${cleanTitle}" بسیار کوتاه است (${cleanDescription.length} کاراکتر)، پست ارسال نمی‌شود`);
+    if (!cleanDescription || cleanDescription.trim().length < 50) {
+      console.log(`محتوای پست "${cleanTitle}" بسیار کوتاه است، پست ارسال نمی‌شود`);
       return false;
     }
     
-    // ⚡️ تغییر مهم: استخراج هوشمند محتوای معنادار
-    // تقسیم متن به پاراگراف‌ها برای تحلیل بهتر
-    const paragraphs = cleanDescription.split(/\n\n+/).filter(p => p.trim().length > 0);
-    
-    // ⚡️ تابع جدید: شناسایی خلاصه خبر (لید) 
-    const findNewsSummary = (paragraphs, title) => {
-      // خلاصه خبر معمولا پاراگراف اول است که حاوی اطلاعات کلیدی است
-      if (paragraphs.length === 0) return "";
-      
-      // جستجو برای پاراگراف حاوی خلاصه
-      // الگوهای رایج لید خبر
-      const summaryPatterns = [
-        // الگوی: کلمه کلیدی خبرگزاری + فعل نقل قول + ":."
-        /^([^.:\n]*?(?:خبرگزاری|گزارش|به گزارش|به نقل از)[^.:]*?(?:گفت|گزارش داد|اعلام کرد|نوشت)):(.{20,})/i,
-        // الگوی: به گزارش...
-        /^به گزارش\s[^،,.:]*،(.{20,})/i,
-        // پاراگراف‌هایی که با عبارت‌های اصلی خبری شروع می‌شوند
-        /^([^.:\n]*?(?:وزیر|رئیس جمهور|رهبر|مقام|سخنگو|دولت)[^.:]*?(?:گفت|اظهار داشت|اعلام کرد|افزود|تاکید کرد)):(.{20,})/i
-      ];
-      
-      // بررسی پاراگراف اول
-      for (const pattern of summaryPatterns) {
-        const match = paragraphs[0].match(pattern);
-        if (match) {
-          return match[2].trim();
+    // IMPROVED TITLE REPETITION FIX: More aggressive search for title in content
+    if (cleanTitle && cleanDescription) {
+      // Remove exact title from the end
+      if (cleanDescription.endsWith(cleanTitle) || cleanDescription.endsWith(cleanTitle + ".")) {
+        cleanDescription = cleanDescription.substring(0, cleanDescription.length - cleanTitle.length).trim();
+        if (cleanDescription.endsWith(".")) {
+          cleanDescription = cleanDescription.substring(0, cleanDescription.length - 1).trim();
         }
       }
       
-      // اگر پاراگراف اول به نسبت کوتاه است (کمتر از 250 کاراکتر) و با عبارات خاصی شروع نمی‌شود
-      // احتمالا خلاصه خبر است
-      if (paragraphs[0].length < 250 && 
-          !paragraphs[0].startsWith("تبلیغات") && 
-          !paragraphs[0].startsWith("آگهی") &&
-          !paragraphs[0].includes("دنبال کنید") &&
-          !paragraphs[0].includes("کلیک کنید")) {
-        return paragraphs[0];
+      // Also remove title from the beginning if it appears exactly
+      if (cleanDescription.startsWith(cleanTitle) || cleanDescription.startsWith(cleanTitle + ".")) {
+        cleanDescription = cleanDescription.substring(cleanTitle.length).trim();
+        if (cleanDescription.startsWith(".")) {
+          cleanDescription = cleanDescription.substring(1).trim();
+        }
       }
       
-      // اگر خلاصه شناسایی نشد، پاراگراف اول برگردانده می‌شود
-      return paragraphs[0];
-    };
-    
-    // ⚡️ تابع جدید: استخراج متن اصلی خبر
-    const extractMainContent = (paragraphs, title, isBreakingNews, isShortNews) => {
-      if (paragraphs.length <= 1) return paragraphs.join("\n\n");
+      // Escape special regex characters in title
+      const escapedTitle = cleanTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       
-      // محتوای سیاسی و اقتصادی مهم معمولا در 2-3 پاراگراف اول خلاصه می‌شود
-      const isPoliticalEconomic = 
-        title.match(/(?:سیاس|اقتصاد|وزیر|رئیس جمهور|مجلس|دولت|بانک|بورس|ارز|دلار|تحریم|مذاکره)/i) !== null;
+      // Look for title in the text and remove it if it appears alone as a sentence or paragraph
+      const titlePattern = new RegExp(`(^|\\n+)\\s*${escapedTitle}\\s*(\\.|\\n+|$)`, 'g');
+      cleanDescription = cleanDescription.replace(titlePattern, '$1');
       
-      // برای اخبار فوری یا کوتاه، فقط خلاصه خبر کافی است
-      if (isBreakingNews || isShortNews) {
-        const summary = findNewsSummary(paragraphs, title);
-        return summary || paragraphs[0];
-      }
-      
-      // برای اخبار سیاسی/اقتصادی مهم تا 3 پاراگراف اول را برمی‌گردانیم
-      if (isPoliticalEconomic) {
-        return paragraphs.slice(0, Math.min(3, paragraphs.length)).join("\n\n");
-      }
-      
-      // تشخیص محتوای ساختار یافته (جدول، لیست و...)
-      const hasStructuredFormat = paragraphs.some(p => p.includes("• ") || p.match(/^[۰-۹0-9]+[\-\.]/) || p.includes(":") && p.split(":").length > 1);
-      
-      if (hasStructuredFormat) {
-        // برای محتوای ساختاریافته حداکثر 5 پاراگراف
-        return paragraphs.slice(0, Math.min(5, paragraphs.length)).join("\n\n");
-      }
-      
-      // حالت عادی: استخراج 2 پاراگراف اول + خلاصه خبر
-      const summary = findNewsSummary(paragraphs, title);
-      let extractedContent = "";
-      
-      if (summary && summary !== paragraphs[0]) {
-        extractedContent = summary + "\n\n";
-      }
-      
-      // اضافه کردن پاراگراف‌های مهم
-      let mainParagraphs;
-      if (paragraphs.length <= 3) {
-        mainParagraphs = paragraphs; // تمام پاراگراف‌ها اگر تعدادشان کم است
-      } else {
-        mainParagraphs = paragraphs.slice(0, 2); // دو پاراگراف اول در حالت عادی
-      }
-      
-      extractedContent += mainParagraphs.join("\n\n");
-      return extractedContent;
-    };
-    
-    // عنوان را با فرمت درست آماده کنیم
-    let titleText = "";
-    if (cleanTitle && cleanTitle.trim()) {
-      // اضافه کردن علامت خبر فوری برای اخبار فوری
-      if (isBreakingNews) {
-        titleText = `🔴 <b>${cleanTitle}</b>\n\n`;
-      } else {
-        titleText = `📌 <b>${cleanTitle}</b>\n\n`;
-      }
-    }
-    
-    // لینک کانال را در انتهای پست اضافه کنیم
-    const channelLink = `\n\n@ramznewsofficial | اخبار رمزی`;
-    
-    // Generate hashtags using the new function
-    let hashtags = extractHashtags(post);
-    
-    // محاسبه حداکثر طول پیام براساس نوع محتوا
-    let maxLength = 3900; // مقدار پیش‌فرض
-    
-    if (validImage) {
-      maxLength = isBreakingNews ? 2000 : 2500; // افزایش محدودیت برای پست‌های با تصویر
-    } else if (isBreakingNews || isShortNews) {
-      maxLength = 3000; // برای اخبار کوتاه، محدودیت کمتر
-    }
-    
-    // ⚡️ استراتژی جدید: استخراج هوشمند محتوا به جای برش ساده متن
-    // با استفاده از تابع جدید، محتوای اصلی خبر را استخراج می‌کنیم
-    let mainContent = extractMainContent(paragraphs, cleanTitle, isBreakingNews, isShortNews);
-    
-    // بررسی طول نهایی پست
-    const otherPartsLength = titleText.length + hashtags.length + channelLink.length;
-    const maxContentLength = maxLength - otherPartsLength;
-    
-    // بررسی اگر محتوای استخراج شده هم بیش از حد طولانی است
-    let finalContent = "";
-    if (mainContent.length <= maxContentLength) {
-      finalContent = mainContent;
-    } else {
-      // کوتاه کردن هوشمند متن با حفظ معنی
-      // ابتدا پاراگراف‌های استخراج شده را دوباره تقسیم می‌کنیم
-      const contentParagraphs = mainContent.split(/\n\n+/);
-      let currentLength = 0;
-      
-      // اولویت با پاراگراف اول (خلاصه) 
-      if (contentParagraphs.length > 0) {
-        finalContent = contentParagraphs[0];
-        currentLength = contentParagraphs[0].length;
+      // Also check for similar title (with small variations)
+      // First create word array from title
+      const titleWords = cleanTitle.split(/\s+/).filter(word => word.length > 3);
+      if (titleWords.length >= 3) {
+        // Find sequences that contain most title words in the same order
+        const titleRegex = new RegExp(`([^.!?؟،؛]+(?:[.!?؟،؛]|$))`, 'g');
+        let match;
         
-        // اضافه کردن پاراگراف‌های بعدی تا جایی که در محدودیت بگنجد
-        for (let i = 1; i < contentParagraphs.length; i++) {
-          const paragraph = contentParagraphs[i];
-          if (currentLength + paragraph.length + 4 <= maxContentLength) {
-            finalContent += "\n\n" + paragraph;
-            currentLength += paragraph.length + 4;
-          } else {
-            // اگر پاراگراف بعدی کامل نمی‌گنجد، سعی می‌کنیم جملات آن را تا حد ممکن اضافه کنیم
-            const sentences = paragraph.split(/(?<=[.!?؟،؛])\s+/);
-            for (const sentence of sentences) {
-              if (currentLength + sentence.length + 1 <= maxContentLength - 3) {
-                finalContent += "\n\n" + sentence;
-                currentLength += sentence.length + 1;
-              } else {
-                break;
+        // Check each sentence for similarity to title
+        while ((match = titleRegex.exec(cleanDescription)) !== null) {
+          const sentence = match[1].trim();
+          // Only check reasonably sized sentences
+          if (sentence.length > titleWords.length * 2) {
+            // Count how many title words appear in this sentence
+            let matchCount = 0;
+            for (const word of titleWords) {
+              if (sentence.includes(word)) {
+                matchCount++;
               }
             }
+            
+            // If most title words appear in this sentence, it's probably a repetition
+            if (matchCount >= titleWords.length * 0.7) {
+              cleanDescription = cleanDescription.replace(sentence, "");
+            }
+          }
+        }
+      }
+      
+      // Normalize multiple line breaks after cleaning
+      cleanDescription = cleanDescription.replace(/\n{3,}/g, "\n\n").trim();
+    }
+    
+    // Detect breaking news and important content
+    const isBreakingNews = post.isBreakingNews || false;
+    const isHighPriorityContent = post.isHighPriorityContent || false;
+    
+    // Split text into paragraphs for better analysis
+    const paragraphs = cleanDescription.split(/\n\n+/).filter(p => p.trim().length > 0);
+    
+    // Use the findNewsSummary function to get the best paragraph
+    let bestSummaryParagraph = "";
+    if (paragraphs.length > 0 && cleanTitle) {
+      bestSummaryParagraph = findNewsSummary(paragraphs, cleanTitle);
+    }
+    
+    // For breaking news, prioritize the best summary paragraph
+    let mainContent = "";
+    if (isBreakingNews || isHighPriorityContent) {
+      if (bestSummaryParagraph) {
+        mainContent = bestSummaryParagraph;
+        
+        // For important news, add one more relevant paragraph
+        if (paragraphs.length > 1 && bestSummaryParagraph.length < 500) {
+          // Add another important paragraph that's not the same as our best summary
+          for (let i = 0; i < paragraphs.length; i++) {
+            const para = paragraphs[i];
+            if (para !== bestSummaryParagraph && para.length > 50 && 
+                mainContent.length + para.length < 1000) {
+              mainContent += "\n\n" + para;
+              break;
+            }
+          }
+        }
+      } else {
+        // Fallback to first paragraph
+        mainContent = paragraphs[0] || cleanDescription;
+      }
+    } else {
+      // For regular news: intelligently select most relevant paragraphs
+      // Start with the best summary paragraph if available
+      let selectedParagraphs = [];
+      
+      if (bestSummaryParagraph) {
+        selectedParagraphs.push(bestSummaryParagraph);
+      }
+      
+      // Then add other important paragraphs (up to 3 total)
+      for (let i = 0; i < paragraphs.length && selectedParagraphs.length < 3; i++) {
+        const para = paragraphs[i];
+        // Don't add the summary paragraph twice
+        if (para !== bestSummaryParagraph && para.length > 50) {
+          selectedParagraphs.push(para);
+          // Limit to 2 additional paragraphs after the summary
+          if (selectedParagraphs.length >= 3) {
             break;
           }
         }
       }
       
-      // اگر با روش بالا هم نتوانستیم محتوای مناسبی استخراج کنیم
-      // فقط خلاصه را استفاده می‌کنیم
-      if (finalContent.length === 0) {
-        const summary = findNewsSummary(paragraphs, cleanTitle);
-        if (summary && summary.length <= maxContentLength) {
-          finalContent = summary;
-        } else if (summary) {
-          // کوتاه کردن خلاصه با حفظ جملات کامل
-          const sentences = summary.split(/(?<=[.!?؟،؛])\s+/);
-          let summaryContent = "";
-          let summaryLength = 0;
-          
-          for (const sentence of sentences) {
-            if (summaryLength + sentence.length <= maxContentLength - 3) {
-              summaryContent += sentence + " ";
-              summaryLength += sentence.length + 1;
-            } else {
-              break;
-            }
-          }
-          
-          finalContent = summaryContent.trim();
+      // If we somehow got no paragraphs, use the first one
+      if (selectedParagraphs.length === 0 && paragraphs.length > 0) {
+        selectedParagraphs.push(paragraphs[0]);
+      }
+      
+      mainContent = selectedParagraphs.join("\n\n");
+    }
+    
+    // Make sure content doesn't end with incomplete sentence
+    if (mainContent) {
+      // If content doesn't end with proper punctuation, find the last complete sentence
+      if (!/[.!?؟،؛]$/.test(mainContent)) {
+        const lastSentenceEnd = Math.max(
+          mainContent.lastIndexOf('.'), 
+          mainContent.lastIndexOf('!'),
+          mainContent.lastIndexOf('?'),
+          mainContent.lastIndexOf('؟'),
+          mainContent.lastIndexOf('،')
+        );
+        
+        if (lastSentenceEnd > mainContent.length * 0.7) { // Only trim if we're not losing too much
+          mainContent = mainContent.substring(0, lastSentenceEnd + 1);
+        } else {
+          // Otherwise add a period
+          mainContent += ".";
         }
       }
     }
     
-    // اطمینان از اینکه متن همیشه با علامت نگارشی مناسب پایان می‌یابد
+    // Format title with proper emoji
+    let titleText = "";
+    if (cleanTitle && cleanTitle.trim()) {
+      if (isBreakingNews) {
+        titleText = `🔴 <b>${cleanTitle}</b>\n\n`;
+      } else if (isHighPriorityContent) {
+        titleText = `⭐️ <b>${cleanTitle}</b>\n\n`;
+      } else {
+        titleText = `📌 <b>${cleanTitle}</b>\n\n`;
+      }
+    }
+    
+    // Add channel link
+    const channelLink = `\n\n@ramznewsofficial | اخبار رمزی`;
+    
+    // Generate hashtags - limited and relevant only
+    let hashtags = extractHashtags(post);
+    
+    // For breaking news, add #فوری if not already there
+    if (isBreakingNews && !hashtags.includes("#فوری")) {
+      if (hashtags.length > 0) {
+        hashtags = "#فوری " + hashtags;
+      } else {
+        hashtags = "#فوری";
+      }
+    }
+    
+    // Set appropriate max length based on content type
+    const hasImage = post.image && isValidUrl(post.image);
+    let maxLength = 3800; // Default limit
+    
+    if (hasImage) {
+      maxLength = isBreakingNews ? 1800 : 2000; // Less for posts with images
+    } else if (isBreakingNews) {
+      maxLength = 2500; // Less for breaking news (better display)
+    }
+    
+    // Calculate available space for content
+    const otherPartsLength = titleText.length + hashtags.length + channelLink.length;
+    const maxContentLength = maxLength - otherPartsLength;
+    
+    // IMPROVED CONTENT SHORTENING: Preserve meaning by trimming at sentence boundaries
+    let finalContent = "";
+    if (mainContent.length <= maxContentLength) {
+      finalContent = mainContent;
+    } else {
+      // Split by sentences more accurately
+      const sentenceRegex = /([^.!?؟،؛]+(?:[.!?؟،؛]|$))/g;
+      const sentences = [];
+      let match;
+      
+      while ((match = sentenceRegex.exec(mainContent)) !== null) {
+        sentences.push(match[1]);
+      }
+      
+      let currentLength = 0;
+      
+      // Add sentences until we reach the limit
+      for (const sentence of sentences) {
+        if (currentLength + sentence.length <= maxContentLength - 3) {
+          finalContent += sentence;
+          currentLength += sentence.length;
+        } else {
+          // If we can fit most of the sentence, trim it intelligently
+          if (sentence.length < 100 && currentLength + sentence.length <= maxContentLength) {
+            finalContent += sentence;
+          } else {
+            // If we have almost no content yet, use part of the first sentence
+            if (finalContent.length < 100 && sentences.indexOf(sentence) === 0) {
+              finalContent = sentence.substring(0, maxContentLength - 3) + "...";
+            } else if (finalContent.length < 100) {
+              // If we still don't have enough, use the first paragraph
+              finalContent = paragraphs[0].substring(0, maxContentLength - 3) + "...";
+            }
+          }
+          break;
+        }
+      }
+    }
+    
+    // Final cleanup of content
     finalContent = finalContent.trim();
+    
+    // Make sure content ends with proper punctuation
     if (finalContent && !/[.!?؟،؛]$/.test(finalContent)) {
       finalContent += ".";
     }
     
-    // پاکسازی نهایی محتوا
-    finalContent = finalContent
-      .replace(/عکس:.*?(?=\n|$)/g, "")
-      .replace(/منبع:.*?(?=\n|$)/g, "")
-      .replace(/تصویر:.*?(?=\n|$)/g, "")
-      .replace(/تبلیغات/g, "")
-      .replace(/https?:\/\/p\.dw\.com\/p\/\w+/g, "")
-      .replace(/\n{3,}/g, "\n\n");
-    
-    // برای اخبار فوری، هشتگ #فوری را در ابتدای هشتگ‌ها اضافه کنیم
-    if (isBreakingNews) {
-      if (!hashtags.includes("#فوری")) {
-        if (hashtags.length > 0) {
-          hashtags = "#فوری " + hashtags;
-        } else {
-          hashtags = "#فوری";
+    // Final check to ensure no title repetition at the end of content
+    const titleWords = cleanTitle.split(/\s+/).filter(word => word.length > 3);
+    if (titleWords.length >= 3) {
+      const lastParagraph = finalContent.split(/\n\n+/).pop() || "";
+      
+      if (lastParagraph.length < cleanTitle.length * 1.5) {
+        // Count how many title words appear in the last paragraph
+        let matchCount = 0;
+        for (const word of titleWords) {
+          if (lastParagraph.includes(word)) {
+            matchCount++;
+          }
+        }
+        
+        // If most of the title words appear in the last paragraph, remove it
+        if (matchCount >= titleWords.length * 0.7) {
+          const parts = finalContent.split(/\n\n+/);
+          if (parts.length > 1) {
+            parts.pop();
+            finalContent = parts.join("\n\n");
+          }
         }
       }
     }
     
-    // ساخت پیام نهایی
+    // Construct final message
     const message = `${titleText}${finalContent}${hashtags}${channelLink}`;
     
-    // تنظیم URL و پارامترهای درخواست بر اساس وجود تصویر
-    const url = validImage 
+    // Configure API URL and payload based on image presence
+    const url = hasImage 
       ? `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`
       : `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
     
-    const payload = validImage 
+    const payload = hasImage 
       ? {
           chat_id: CHANNEL_USERNAME,
-          photo: validImage,
+          photo: post.image,
           caption: message,
           parse_mode: "HTML"
         } 
@@ -1188,52 +1171,27 @@ async function sendTelegramPost(post, env) {
     
     console.log(`ارسال پست به تلگرام: ${cleanTitle}`);
     
-    // ارسال درخواست به API تلگرام
+    // Send request to Telegram API
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
     
-    // بررسی پاسخ و مدیریت خطاها
+    // Handle errors
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`Telegram API error: ${response.statusText}, Response: ${errorText}`);
       
       if (errorText.includes("message is too long") || errorText.includes("caption is too long")) {
-        console.log("Message is still too long, shortening it further");
+        // If still too long, try sending only the title and best summary paragraph
+        const shorterContent = bestSummaryParagraph || (paragraphs.length > 0 ? paragraphs[0] : "");
+        const shorterMessage = `${titleText}${shorterContent}${channelLink}`;
         
-        // کوتاه‌سازی بیشتر با استخراج فقط خلاصه خبر
-        const summary = findNewsSummary(paragraphs, cleanTitle);
-        let shorterContent = "";
-        
-        if (summary && summary.length <= 500) {
-          shorterContent = summary;
-        } else {
-          // یافتن آخرین پایان جمله در 500 کاراکتر اول
-          const availableText = (summary || paragraphs[0] || "").substring(0, 500);
-          const lastSentenceEnd = Math.max(
-            availableText.lastIndexOf(". "),
-            availableText.lastIndexOf("! "),
-            availableText.lastIndexOf("? "),
-            availableText.lastIndexOf("؟ "),
-            availableText.lastIndexOf("! ")
-          );
-          
-          if (lastSentenceEnd > 0) {
-            shorterContent = availableText.substring(0, lastSentenceEnd + 1);
-          } else {
-            shorterContent = availableText.substring(0, 495) + "...";
-          }
-        }
-        
-        // ایجاد پیام کوتاه‌تر
-        const shorterMessage = `${titleText}${shorterContent}${hashtags}${channelLink}`;
-        
-        const shorterPayload = validImage 
+        const shorterPayload = hasImage 
           ? {
               chat_id: CHANNEL_USERNAME,
-              photo: validImage,
+              photo: post.image,
               caption: shorterMessage,
               parse_mode: "HTML"
             } 
@@ -1243,7 +1201,7 @@ async function sendTelegramPost(post, env) {
               parse_mode: "HTML"
             };
         
-        console.log("Retrying with shorter message");
+        console.log("Retrying with shorter message containing just the best summary paragraph");
         
         const retryResponse = await fetch(url, {
           method: "POST",
@@ -1252,8 +1210,7 @@ async function sendTelegramPost(post, env) {
         });
         
         if (!retryResponse.ok) {
-          const retryErrorText = await retryResponse.text();
-          console.error(`Final telegram API error after retry: ${retryResponse.statusText}, Response: ${retryErrorText}`);
+          console.error(`Final telegram API error after retry: ${await retryResponse.text()}`);
           return false;
         }
         
@@ -1709,7 +1666,7 @@ function extractPubDate(itemContent, isAtom) {
   }
 }
 
-async function fetchLatestPosts(feedUrl, limit = 1) {
+async function fetchLatestPosts(feedUrl, limit = 5) {
   try {
     console.log(`درحال دریافت محتوا از ${feedUrl.source} (${feedUrl.url})`);
     
@@ -1718,7 +1675,9 @@ async function fetchLatestPosts(feedUrl, limit = 1) {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "fa,en-US;q=0.7,en;q=0.3"
-      }
+      },
+      // Add timeout to prevent hanging requests
+      timeout: 10000
     });
     
     if (!response.ok) {
@@ -1733,77 +1692,88 @@ async function fetchLatestPosts(feedUrl, limit = 1) {
     let match;
     let count = 0;
     
-    // ⚡️ تابع جدید: تشخیص نوع محتوا و فرمت
-    const detectContentType = (title, content) => {
-      // تشخیص خبر فوری
+    // Function to detect content type 
+    const detectContentType = (title, content, source) => {
+      // Breaking news detection - expanded patterns
       const breakingNewsPatterns = [
-        /فوری/i, /اخبار فوری/i, /خبر فوری/i, /لحظاتی پیش/i, /همین الان/i, /عاجل/i
+        /فوری/i, /اخبار فوری/i, /خبر فوری/i, /لحظاتی پیش/i, /همین الان/i, /عاجل/i, 
+        /خبر مهم/i, /هم‌اکنون/i, /خبر لحظه‌ای/i, /آخرین خبر/i, /اطلاعیه مهم/i,
+        /هشدار/i, /اعلان/i, /بیانیه مهم/i
       ];
       
-      const isBreakingNews = breakingNewsPatterns.some(pattern => pattern.test(title));
+      const isBreakingNews = breakingNewsPatterns.some(pattern => 
+        pattern.test(title)
+      );
       
-      // تشخیص خبر سیاسی
-      const politicalPatterns = [
-        /سیاس/i, /دولت/i, /وزیر/i, /مجلس/i, /رئیس جمهور/i, /انتخابات/i, /مذاکر/i, /تحریم/i,
-        /آمریکا/i, /ایران/i, /روسیه/i, /چین/i, /اروپا/i
-      ];
+      // Enhanced High priority content detection with more specific patterns
+      const highPriorityPatterns = {
+        political: [
+          /رئیس ?جمهور/i, /وزیر خارجه/i, /شورای امنیت/i, /سازمان ملل/i, 
+          /جنگ/i, /حمله/i, /تحریم/i, /هسته‌ای/i, /برجام/i, /مذاکرات/i, 
+          /توافق/i, /بیانیه/i, /حمله نظامی/i, /حمله موشکی/i, /انتخابات/i,
+          /رهبر/i, /انقلاب/i, /مقام معظم/i
+        ],
+        economic: [
+          /بانک مرکزی/i, /افزایش (شدید|قیمت)/i, /کاهش (شدید|قیمت)/i, 
+          /تورم/i, /رکود/i, /بحران اقتصادی/i, /سقوط ارزش/i, 
+          /نرخ ارز/i, /دلار/i, /یورو/i
+        ],
+        crypto: [
+          /سقوط (بیت ?کوین|رمزارز)/i, /افزایش قیمت بیت ?کوین/i, 
+          /هک (صرافی|رمزارز)/i, /تصویب قانون/i, /رگولاتوری/i
+        ]
+      };
       
-      const isPolitical = politicalPatterns.some(pattern => pattern.test(title) || pattern.test(content.substring(0, 200)));
+      // Check for high priority across all categories
+      const isHighPriorityContent = 
+        highPriorityPatterns.political.some(pattern => pattern.test(title)) ||
+        highPriorityPatterns.economic.some(pattern => pattern.test(title)) ||
+        highPriorityPatterns.crypto.some(pattern => pattern.test(title));
       
-      // تشخیص خبر اقتصادی
-      const economicPatterns = [
-        /اقتصاد/i, /بورس/i, /بانک/i, /دلار/i, /ارز/i, /قیمت/i, /طلا/i, /سکه/i,
-        /تورم/i, /بازار/i
-      ];
+      // Determine content category
+      let category = "general";
       
-      const isEconomic = economicPatterns.some(pattern => pattern.test(title) || pattern.test(content.substring(0, 200)));
-      
-      // تشخیص محتوای رمزارزی
-      const cryptoPatterns = [
-        /بیت ?کوین/i, /اتریوم/i, /رمزارز/i, /ارز ?دیجیتال/i, /بلاک ?چین/i,
-        /توکن/i, /نشانه/i
-      ];
-      
-      const isCrypto = cryptoPatterns.some(pattern => pattern.test(title) || pattern.test(content.substring(0, 200)));
-      
-      // تشخیص محتوای ساختاریافته (جدول، لیست، برنامه زمانی)
-      const structuredContentPatterns = [
-        /ساعت کاری/i, /زمان کار/i, /برنامه زمانی/i, /جدول زمان/i, /به شرح زیر/i,
-        /لیست/i, /فهرست/i, /مراحل/i, /گام به گام/i,
-        /:[\s\n]*•/i, /\d+[\-\.][\s\n]/i
-      ];
-      
-      const isStructured = structuredContentPatterns.some(pattern => pattern.test(title) || pattern.test(content));
-      
-      // تشخیص محتوای خبری ساده
-      const newsPatterns = [
-        /^[^:]+?: /i, /گفت:?/i, /اعلام کرد:?/i, /خبر داد:?/i, /گزارش داد:?/i,
-        /به گزارش/i, /به نقل از/i, /خبرگزاری/i, /طبق گزارش/i
-      ];
-      
-      const isNews = newsPatterns.some(pattern => pattern.test(title) || pattern.test(content.substring(0, 200)));
+      // Political sources are typically BB, DW, Euronews
+      if (source && (source.includes("BBC") || source.includes("DW") || source.includes("Euronews"))) {
+        category = "politics";
+      }
+      // Crypto sources
+      else if (source && (
+        source.includes("Crypto") || source.includes("Ramzarz") || 
+        source.includes("Arz Digital") || source.includes("Coin")
+      )) {
+        category = "crypto";
+      }
+      // Economic sources
+      else if (source && (source.includes("Tejarat") || source.includes("Eghtesad") || source.includes("TGJU"))) {
+        category = "economy";
+      }
+      // Otherwise do content-based detection
+      else {
+        if (highPriorityPatterns.political.some(pattern => pattern.test(title + " " + content.substring(0, 200)))) {
+          category = "politics";
+        } else if (highPriorityPatterns.economic.some(pattern => pattern.test(title + " " + content.substring(0, 200)))) {
+          category = "economy";
+        } else if (highPriorityPatterns.crypto.some(pattern => pattern.test(title + " " + content.substring(0, 200)))) {
+          category = "crypto";
+        }
+      }
       
       return {
         isBreakingNews,
-        isPolitical,
-        isEconomic,
-        isCrypto,
-        isStructured,
-        isNews,
-        category: isPolitical ? "politics" : 
-                 isEconomic ? "economy" : 
-                 isCrypto ? "crypto" : 
-                 isNews ? "news" : "general"
+        isHighPriority: isHighPriorityContent,
+        isNews: true,
+        category
       };
     };
     
-    // ⚡️ تابع جدید: تفکیک هوشمند بخش‌های مختلف XML
-    const parseItemContent = (itemContent, isAtom) => {
-      // استخراج عنوان
+    // Extract the best content from item
+    const parseItemContent = (itemContent, isAtom, source) => {
+      // Extract title
       const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(itemContent);
       const title = titleMatch ? sanitizeText(titleMatch[1]) : "";
       
-      // استخراج لینک
+      // Extract link
       let link = "";
       if (isAtom) {
         const linkMatch = /<link[^>]*href="([^"]*)"[^>]*>/i.exec(itemContent);
@@ -1818,16 +1788,15 @@ async function fetchLatestPosts(feedUrl, limit = 1) {
         }
       }
       
-      // استخراج تاریخ انتشار
+      // Extract date
       const pubDate = extractPubDate(itemContent, isAtom);
       
-      // استخراج محتوای description و content
+      // Extract description and content
       let description = "";
       let content = "";
       let summary = "";
       
       if (isAtom) {
-        // برای فیدهای Atom
         const contentMatch = /<content[^>]*>([\s\S]*?)<\/content>/i.exec(itemContent);
         const summaryMatch = /<summary[^>]*>([\s\S]*?)<\/summary>/i.exec(itemContent);
         
@@ -1835,43 +1804,30 @@ async function fetchLatestPosts(feedUrl, limit = 1) {
         summary = summaryMatch ? summaryMatch[1] : "";
         description = summary || content;
       } else {
-        // برای فیدهای RSS
         const descMatch = /<description[^>]*>([\s\S]*?)<\/description>/i.exec(itemContent);
         description = descMatch ? descMatch[1] : "";
         
         const contentEncodedMatch = /<content:encoded[^>]*>([\s\S]*?)<\/content:encoded>/i.exec(itemContent);
         content = contentEncodedMatch ? contentEncodedMatch[1] : "";
         
-        // جستجو برای خلاصه در اختصاصی‌های مختلف RSS
         const summaryMatch = /<itunes:summary[^>]*>([\s\S]*?)<\/itunes:summary>/i.exec(itemContent) ||
-                           /<media:description[^>]*>([\s\S]*?)<\/media:description>/i.exec(itemContent) ||
-                           /<summary[^>]*>([\s\S]*?)<\/summary>/i.exec(itemContent);
+                           /<media:description[^>]*>([\s\S]*?)<\/media:description>/i.exec(itemContent);
         
         if (summaryMatch) {
           summary = summaryMatch[1];
         }
       }
       
-      // استخراج نویسنده
-      let author = "";
-      const authorMatch = isAtom 
-        ? /<author[^>]*>[\s\S]*?<name[^>]*>([\s\S]*?)<\/name>/i.exec(itemContent) 
-        : /<dc:creator[^>]*>([\s\S]*?)<\/dc:creator>/i.exec(itemContent) || /<author[^>]*>([\s\S]*?)<\/author>/i.exec(itemContent);
-      
-      if (authorMatch) {
-        author = sanitizeText(authorMatch[1]);
-      }
-      
-      // استخراج تصویر
+      // Extract image
       let image = null;
       
-      // بررسی enclosure برای تصویر
+      // Check for enclosure image
       const enclosureMatch = /<enclosure[^>]*url="([^"]*)"[^>]*type="image\/[^"]*"[^>]*>/i.exec(itemContent);
       if (enclosureMatch) {
         image = enclosureMatch[1];
       }
       
-      // بررسی media:content برای تصویر
+      // Check for media:content image
       if (!image) {
         const mediaContentMatch = /<media:content[^>]*url="([^"]*)"[^>]*type="image\/[^"]*"[^>]*>/i.exec(itemContent) ||
                                 /<media:content[^>]*url="([^"]*)"[^>]*medium="image"[^>]*>/i.exec(itemContent);
@@ -1880,7 +1836,7 @@ async function fetchLatestPosts(feedUrl, limit = 1) {
         }
       }
       
-      // بررسی media:thumbnail برای تصویر
+      // Check for media:thumbnail
       if (!image) {
         const mediaThumbnailMatch = /<media:thumbnail[^>]*url="([^"]*)"[^>]*>/i.exec(itemContent);
         if (mediaThumbnailMatch) {
@@ -1888,177 +1844,114 @@ async function fetchLatestPosts(feedUrl, limit = 1) {
         }
       }
       
-      // بررسی itunes:image برای تصویر
-      if (!image) {
-        const itunesImageMatch = /<itunes:image[^>]*href="([^"]*)"[^>]*>/i.exec(itemContent);
-        if (itunesImageMatch) {
-          image = itunesImageMatch[1];
-        }
-      }
-      
-      // بررسی image درون محتوا
+      // Check for image in content
       if (!image && (content || description)) {
         const imgMatch = (content || description).match(/<img[^>]+src="([^">]+)"/);
         if (imgMatch && imgMatch[1]) {
           image = imgMatch[1];
-          
-          // تبدیل URL نسبی به مطلق
-          if (image && !image.startsWith("http") && link) {
-            try {
-              const urlObj = new URL(link);
-              if (image.startsWith("/")) {
-                image = `${urlObj.protocol}//${urlObj.hostname}${image}`;
-              } else {
-                image = `${urlObj.protocol}//${urlObj.hostname}/${image}`;
-              }
-            } catch (e) {
-              console.log(`خطا در تبدیل URL نسبی به مطلق: ${e.message}`);
-            }
-          }
         }
       }
       
-      // تمیز کردن و تشخیص نوع محتوا
+      // Clean and choose best content
       const cleanTitle = sanitizeText(title);
       const cleanDescription = sanitizeText(description);
       const cleanContent = sanitizeText(content);
       const cleanSummary = sanitizeText(summary);
       
-      // انتخاب هوشمند محتوای نهایی
-      let finalContent = chooseBestContent(cleanDescription, cleanContent, cleanSummary);
+      // Choose best content by length and quality
+      let finalContent;
+      if (cleanContent && cleanContent.length > cleanDescription.length) {
+        finalContent = cleanContent;
+      } else if (cleanDescription && cleanDescription.length > 0) {
+        finalContent = cleanDescription;
+      } else if (cleanSummary && cleanSummary.length > 0) {
+        finalContent = cleanSummary;
+      } else {
+        finalContent = "";
+      }
       
-      // تشخیص نوع محتوا
-      const contentType = detectContentType(cleanTitle, finalContent);
+      // Detect content type and importance
+      const contentType = detectContentType(cleanTitle, finalContent, source);
       
       return {
         title: cleanTitle,
         description: finalContent,
-        originalDescription: cleanDescription,
-        originalContent: cleanContent,
-        originalSummary: cleanSummary,
         link,
         image,
         pubDate,
-        author,
         contentType
       };
     };
     
-    // ⚡️ تابع جدید: انتخاب بهترین محتوا از میان گزینه‌های موجود
-    const chooseBestContent = (description, content, summary) => {
-      // اگر فقط یک گزینه غیر خالی وجود دارد، آن را انتخاب می‌کنیم
-      if (description && !content && !summary) return description;
-      if (!description && content && !summary) return content;
-      if (!description && !content && summary) return summary;
-      
-      // امتیازدهی به هر محتوا براساس کیفیت
-      const scoreContent = (text) => {
-        if (!text) return 0;
-        
-        let score = 0;
-        
-        // امتیاز براساس طول (طول مناسب)
-        if (text.length > 1000) score += 5;
-        else if (text.length > 500) score += 4;
-        else if (text.length > 300) score += 3;
-        else if (text.length > 100) score += 2;
-        else score += 1;
-        
-        // امتیاز براساس پاراگراف‌بندی (کیفیت ساختار)
-        const paragraphs = text.split("\n\n").filter(p => p.trim().length > 0);
-        score += Math.min(paragraphs.length, 5);
-        
-        // امتیاز منفی برای محتوای احتمالاً HTML
-        if (text.includes("<") && text.includes(">")) score -= 3;
-        
-        // امتیاز منفی برای محتوای تبلیغاتی
-        if (text.includes("دنبال کنید") || text.includes("کلیک کنید")) score -= 2;
-        
-        return score;
-      };
-      
-      const descriptionScore = scoreContent(description);
-      const contentScore = scoreContent(content);
-      const summaryScore = scoreContent(summary);
-      
-      console.log(`امتیاز محتواها - description: ${descriptionScore}, content: ${contentScore}, summary: ${summaryScore}`);
-      
-      // انتخاب محتوا با بالاترین امتیاز
-      if (descriptionScore >= contentScore && descriptionScore >= summaryScore) {
-        return description;
-      } else if (contentScore >= descriptionScore && contentScore >= summaryScore) {
-        return content;
-      } else {
-        return summary;
-      }
-    };
-    
-    // پردازش آیتم‌های RSS/Atom
+    // Process all items
+    const processPromises = [];
     while ((match = itemRegex.exec(text)) !== null && count < limit) {
       const itemContent = match[1];
-      const parsedItem = parseItemContent(itemContent, isAtom);
+      const parsedItem = parseItemContent(itemContent, isAtom, feedUrl.source);
       
-      // بررسی کیفیت اولیه
+      // Validate parsed item
       if (!parsedItem.title || parsedItem.title.trim().length === 0) {
-        console.log("عنوان پست خالی است، پست نادیده گرفته می‌شود");
         continue;
       }
       
-      if (!parsedItem.description || parsedItem.description.trim().length < 100) {
-        console.log(`محتوای پست "${parsedItem.title}" بسیار کوتاه است (${parsedItem.description ? parsedItem.description.length : 0} کاراکتر)، پست نادیده گرفته می‌شود`);
+      if (!parsedItem.description || parsedItem.description.trim().length < 50) {
         continue;
       }
       
-      // دریافت محتوای کامل از صفحه اصلی اگر لینک موجود باشد
-      if (parsedItem.link) {
-        console.log(`دریافت محتوای کامل از صفحه اصلی: ${parsedItem.link}`);
-        const fullContent = await fetchFullContent(parsedItem.link, feedUrl.source);
-        
-        if (fullContent.content && fullContent.content.length > 100) {
-          // مقایسه محتوای استخراج شده از صفحه با محتوای فید
-          if (fullContent.content.length > parsedItem.description.length * 1.2) {
-            // محتوای صفحه حداقل 20% بزرگتر است، جایگزین می‌کنیم
-            console.log(`محتوای کامل‌تر از صفحه اصلی جایگزین شد (${fullContent.content.length} vs ${parsedItem.description.length} کاراکتر)`);
-            parsedItem.description = fullContent.content;
-          } else {
-            console.log(`محتوای فعلی کافی است، از محتوای صفحه اصلی استفاده نمی‌شود (${parsedItem.description.length} vs ${fullContent.content.length} کاراکتر)`);
-          }
-        } else {
-          console.log(`محتوای صفحه اصلی ناکافی است (${fullContent.content ? fullContent.content.length : 0} کاراکتر)`);
-        }
-        
-        if (fullContent.image && (!parsedItem.image || fullContent.image.includes("original") || fullContent.image.includes("large"))) {
-          parsedItem.image = fullContent.image;
-          console.log(`تصویر با کیفیت با موفقیت دریافت شد: ${parsedItem.image}`);
-        }
+      // If it's breaking news or high priority, fetch full content immediately
+      // Otherwise, only fetch if content is short
+      const shouldFetchFullContent = parsedItem.contentType.isBreakingNews || 
+                                   parsedItem.contentType.isHighPriority ||
+                                   parsedItem.description.length < 300;
+      
+      if (parsedItem.link && shouldFetchFullContent) {
+        // Create a promise for fetching content but don't wait
+        const contentPromise = fetchFullContent(parsedItem.link, feedUrl.source)
+          .then(fullContent => {
+            if (fullContent.content && fullContent.content.length > parsedItem.description.length * 1.2) {
+              parsedItem.description = fullContent.content;
+            }
+            
+            if (fullContent.image && (!parsedItem.image || fullContent.image.includes("original") || fullContent.image.includes("large"))) {
+              parsedItem.image = fullContent.image;
+            }
+            
+            return parsedItem;
+          })
+          .catch(() => parsedItem); // On error, use original item
+          
+        processPromises.push(contentPromise);
+      } else {
+        // Use item as is
+        processPromises.push(Promise.resolve(parsedItem));
       }
-      
-      // پاکسازی نهایی محتوا
-      parsedItem.description = parsedItem.description
-        .replace(/عکس:.*?(?=\n|$)/g, "")
-        .replace(/منبع:.*?(?=\n|$)/g, "")
-        .replace(/تصویر:.*?(?=\n|$)/g, "")
-        .replace(/تبلیغات/g, "")
-        .replace(/https?:\/\/p\.dw\.com\/p\/\w+/g, "")
-        .replace(/\n{3,}/g, "\n\n");
-      
-      // تبدیل نتیجه به فرمت مورد نیاز
-      items.push({
-        title: parsedItem.title,
-        description: parsedItem.description,
-        link: parsedItem.link,
-        image: parsedItem.image,
-        source: feedUrl.source,
-        pubDate: parsedItem.pubDate,
-        author: parsedItem.author,
-        isBreakingNews: parsedItem.contentType.isBreakingNews,
-        isNews: parsedItem.contentType.isNews,
-        isStructured: parsedItem.contentType.isStructured,
-        category: parsedItem.contentType.category
-      });
       
       count++;
     }
+    
+    // Wait for all content fetching to complete (with timeout)
+    const results = await Promise.allSettled(processPromises);
+    
+    // Process results
+    results.forEach(result => {
+      if (result.status === 'fulfilled') {
+        const item = result.value;
+        
+        // Add to items array
+        items.push({
+          title: item.title,
+          description: item.description,
+          link: item.link,
+          image: item.image,
+          source: feedUrl.source,
+          pubDate: item.pubDate,
+          isBreakingNews: item.contentType.isBreakingNews,
+          isHighPriorityContent: item.contentType.isHighPriority,
+          isNews: item.contentType.isNews,
+          category: item.contentType.category
+        });
+      }
+    });
     
     console.log(`${items.length} پست از ${feedUrl.source} دریافت شد`);
     return items;
@@ -2082,84 +1975,127 @@ async function processFeeds(env) {
     const processedIdentifiers = new Set();
     const processedTitles = new Set();
     
-    // دسته‌بندی فیدها بر اساس اولویت
-    const highPriorityFeeds = RSS_FEEDS.filter(feed => feed.priority === "high"); // اولویت اول: سیاسی
-    const mediumPriorityFeeds = RSS_FEEDS.filter(feed => feed.priority === "medium"); // اولویت دوم: اقتصادی
-    const lowPriorityFeeds = RSS_FEEDS.filter(feed => feed.priority === "low"); // اولویت سوم: کریپتو
+    // Categorize feeds by priority
+    const highPriorityFeeds = RSS_FEEDS.filter(feed => feed.priority === "high"); // Political news
+    const mediumPriorityFeeds = RSS_FEEDS.filter(feed => feed.priority === "medium"); // Economic news
+    const lowPriorityFeeds = RSS_FEEDS.filter(feed => feed.priority === "low"); // Crypto news
     
     console.log(`فیدها بر اساس اولویت: ${highPriorityFeeds.length} فید اولویت بالا، ${mediumPriorityFeeds.length} فید اولویت متوسط، ${lowPriorityFeeds.length} فید اولویت پایین`);
     
-    // تابع کمکی برای پردازش فیدها
-    const processFeedsByPriority = async (feeds, priorityName) => {
+    // Helper function to process feeds
+    const processFeedsByPriority = async (feeds, priorityName, minQualityScore) => {
       console.log(`شروع پردازش ${feeds.length} فید با اولویت ${priorityName}`);
       
       const allPosts = [];
+      const fetchPromises = [];
       
-      // دریافت همه پست‌ها از فیدهای این اولویت
+      // Fetch posts from all feeds in parallel
       for (const feed of feeds) {
-        try {
-          console.log(`دریافت پست‌ها از ${feed.source} (${feed.url})`);
-          const latestPosts = await fetchLatestPosts(feed, 3);
-          console.log(`${latestPosts.length} پست از ${feed.source} یافت شد`);
-          
-          // بررسی اولیه محتوای پست‌ها
-          for (const post of latestPosts) {
-            // فیلتر کردن پست‌های تبلیغاتی یورونیوز
-            if (feed.source === "Euronews Persian" &&
-                (post.title.includes("سرخط خبرها") || 
-                 post.title.includes("مجله شامگاهی") ||
-                 (post.description && post.description.includes("یورونیوز در «سرخط خبرها» مهم‌ترین رویدادهای ایران و جهان را در دو نوبت مرور می‌کند")) ||
-                 (post.description && post.description.includes("مجله شامگاهی» برنامه‌ای تصویری از یورونیوز است که هر شب")))) {
-              console.log(`پست "${post.title}" از پست‌های تبلیغاتی یورونیوز است، نادیده گرفتن...`);
-              filteredCount++;
-              continue;
-            }
-            
-            // ارزیابی کیفیت محتوا
-            const qualityEvaluation = evaluateContentQuality(post);
-            if (!qualityEvaluation.isHighQuality) {
-              console.log(`پست "${post.title}" رد شد: ${qualityEvaluation.reason}`);
-              lowQualityCount++;
-              continue;
-            }
-            
-            // اضافه کردن اطلاعات مورد نیاز برای پردازش بعدی
-            allPosts.push({
-              ...post,
-              feed,
-              uniqueIdentifier: generatePostIdentifier(post),
-              normalizedTitle: post.title.trim().replace(/\s+/g, " ").toLowerCase(),
-              qualityEvaluation
-            });
-          }
-        } catch (error) {
-          console.error(`خطا در دریافت فید ${feed.source}: ${error.message}`);
-          failureCount++;
-        }
+        const postsPerFeed = priorityName.includes("بالا") ? 15 : // More posts from high priority feeds
+                            priorityName.includes("متوسط") ? 10 : // Medium from economic feeds
+                            7; // Fewer from crypto feeds (lower priority)
+                            
+        const fetchPromise = fetchLatestPosts(feed, postsPerFeed)
+          .then(posts => {
+            // Initial quality check for each post
+            return posts.map(post => {
+              // Add identifier and do basic quality check
+              const uniqueIdentifier = generatePostIdentifier(post);
+              const normalizedTitle = post.title.trim().replace(/\s+/g, " ").toLowerCase();
+              const qualityEvaluation = evaluateContentQuality(post);
+              
+              return {
+                ...post,
+                feed,
+                uniqueIdentifier,
+                normalizedTitle,
+                qualityEvaluation
+              };
+            }).filter(post => post.qualityEvaluation.isHighQuality);
+          })
+          .catch(error => {
+            console.error(`خطا در دریافت فید ${feed.source}: ${error.message}`);
+            failureCount++;
+            return [];
+          });
+        
+        fetchPromises.push(fetchPromise);
       }
+      
+      // Wait for all feed fetching to complete
+      const results = await Promise.all(fetchPromises);
+      
+      // Combine all posts from all feeds
+      results.forEach(posts => {
+        allPosts.push(...posts);
+      });
       
       console.log(`${allPosts.length} پست با کیفیت مناسب از فیدهای اولویت ${priorityName} دریافت شد`);
       
-      // مرتب‌سازی پست‌ها بر اساس امتیاز کیفی و اخبار فوری
+      // Sort posts by priority with enhanced logic:
+      // 1. Breaking news
+      // 2. High-priority political/international news
+      // 3. Quality score and recency
       allPosts.sort((a, b) => {
-        // اولویت اول: اخبار فوری
-        if (a.qualityEvaluation.isBreakingNews && !b.qualityEvaluation.isBreakingNews) return -1;
-        if (!a.qualityEvaluation.isBreakingNews && b.qualityEvaluation.isBreakingNews) return 1;
+        // Breaking news first
+        if (a.isBreakingNews && !b.isBreakingNews) return -1;
+        if (!a.isBreakingNews && b.isBreakingNews) return 1;
         
-        // اولویت دوم: امتیاز کیفی
+        // High priority content next
+        if (a.isHighPriorityContent && !b.isHighPriorityContent) return -1;
+        if (!a.isHighPriorityContent && b.isHighPriorityContent) return 1;
+        
+        // If both are breaking or both are high priority, consider quality score
+        if ((a.isBreakingNews && b.isBreakingNews) || (a.isHighPriorityContent && b.isHighPriorityContent)) {
+          // If quality score differs significantly
+          const qualityDiff = b.qualityEvaluation.qualityScore - a.qualityEvaluation.qualityScore;
+          if (Math.abs(qualityDiff) >= 3) {
+            return qualityDiff;
+          }
+          
+          // If similar quality, consider recency for breaking/important news
+          if (a.pubDate && b.pubDate) {
+            return new Date(b.pubDate) - new Date(a.pubDate); // Newer first
+          }
+        }
+        
+        // Otherwise just use quality score
         return b.qualityEvaluation.qualityScore - a.qualityEvaluation.qualityScore;
       });
       
-      // پردازش پست‌ها به ترتیب اولویت
-      for (const post of allPosts) {
-        // بررسی تکراری بودن در همین اجرا
+      // Limit the number of posts we'll process based on priority 
+      // to avoid flooding the channel and focus on quality
+      const maxPostsToProcess = priorityName.includes("بالا") ? 5 : // Send at most 5 political posts
+                               priorityName.includes("متوسط") ? 3 : // Send at most 3 economic posts
+                               2; // Send at most 2 crypto posts
+      
+      // But always process breaking news regardless of limits
+      const breakingNewsPosts = allPosts.filter(post => post.isBreakingNews);
+      const highPriorityPosts = allPosts.filter(post => !post.isBreakingNews && post.isHighPriorityContent);
+      const otherPosts = allPosts.filter(post => !post.isBreakingNews && !post.isHighPriorityContent);
+      
+      // Order: all breaking news + limited high priority + limited regular posts
+      const postsToProcess = [
+        ...breakingNewsPosts,
+        ...highPriorityPosts.slice(0, maxPostsToProcess),
+        ...otherPosts.slice(0, Math.max(1, maxPostsToProcess - highPriorityPosts.length))
+      ];
+      
+      console.log(`پردازش ${postsToProcess.length} پست از مجموع ${allPosts.length} پست دریافتی (${breakingNewsPosts.length} خبر فوری، ${highPriorityPosts.length} خبر مهم)`);
+      
+      // Process posts by priority
+      const postPromises = [];
+      
+      // Process each post
+      for (const post of postsToProcess) {
+        // Check for duplicates in this run
         if (processedIdentifiers.has(post.uniqueIdentifier) || processedTitles.has(post.normalizedTitle)) {
           console.log(`پست "${post.title}" قبلاً در همین اجرا پردازش شده است، نادیده گرفتن...`);
           duplicateCount++;
           continue;
         }
         
-        // ایجاد شناسه‌های اضافی برای بررسی دقیق‌تر
+        // Create additional identifiers for more thorough duplicate check
         const additionalIdentifiers = [];
         if (post.title) {
           const titleIdentifier = post.title.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, "").trim();
@@ -2169,81 +2105,112 @@ async function processFeeds(env) {
           additionalIdentifiers.push(post.link);
         }
         
-        // بررسی تکراری بودن در پست‌های قبلی
-        let isPostSent = await hasPostBeenSent(post.uniqueIdentifier, env);
-        
-        if (!isPostSent) {
-          for (const additionalId of additionalIdentifiers) {
-            if (await hasPostBeenSent(additionalId, env)) {
-              isPostSent = true;
-              console.log(`پست با شناسه اضافی "${additionalId}" قبلاً ارسال شده است.`);
-              duplicateCount++;
-              break;
-            }
-          }
+        // Skip posts with quality score below threshold (unless breaking news)
+        if (!post.isBreakingNews && 
+            !post.isHighPriorityContent && 
+            post.qualityEvaluation.qualityScore < minQualityScore) {
+          console.log(`پست "${post.title}" به دلیل امتیاز کیفی پایین (${post.qualityEvaluation.qualityScore}) رد شد`);
+          lowQualityCount++;
+          continue;
         }
         
-        // بررسی محتوای مشابه با دقت بیشتر
-        if (!isPostSent) {
-          const contentDuplicate = await isContentDuplicate(post, env);
-          if (contentDuplicate) {
-            console.log(`پست "${post.title}" دارای محتوای مشابه با پست‌های قبلی است، نادیده گرفتن...`);
-            isPostSent = true;
-            duplicateCount++;
-          }
-        }
-        
-        // ارسال پست در صورت عدم تکراری بودن
-        if (!isPostSent) {
-          console.log(`ارسال پست با اولویت ${priorityName} از ${post.source}: ${post.title} (امتیاز کیفی: ${post.qualityEvaluation.qualityScore})`);
-          const success = await sendTelegramPost(post, env);
+        // Process each post asynchronously but in order
+        const postPromise = (async () => {
+          // Check if post has been sent before
+          let isPostSent = await hasPostBeenSent(post.uniqueIdentifier, env);
           
-          if (success) {
-            // ذخیره اطلاعات پست ارسال شده
-            const postData = {
-              title: post.title,
-              link: post.link,
-              source: post.source,
-              description: post.description ? post.description.substring(0, 300) : "",
-              qualityScore: post.qualityEvaluation.qualityScore || 0,
-              sentAt: new Date().toISOString()
-            };
-            
-            await markPostAsSent(post.uniqueIdentifier, env, postData);
-            
+          if (!isPostSent) {
             for (const additionalId of additionalIdentifiers) {
-              await markPostAsSent(additionalId, env, {
-                referenceId: post.uniqueIdentifier,
-                sentAt: new Date().toISOString()
-              });
+              if (await hasPostBeenSent(additionalId, env)) {
+                isPostSent = true;
+                console.log(`پست با شناسه اضافی "${additionalId}" قبلاً ارسال شده است.`);
+                duplicateCount++;
+                break;
+              }
             }
-            
-            processedIdentifiers.add(post.uniqueIdentifier);
-            processedTitles.add(post.normalizedTitle);
-            successCount++;
-            await delay(DELAY_BETWEEN_POSTS);
-          } else {
-            failureCount++;
           }
-        } else {
-          console.log(`پست قبلاً ارسال شده است: ${post.title}`);
-        }
+          
+          // Check for similar content
+          if (!isPostSent && !post.isBreakingNews) {
+            const contentDuplicate = await isContentDuplicate(post, env);
+            if (contentDuplicate) {
+              console.log(`پست "${post.title}" دارای محتوای مشابه با پست‌های قبلی است، نادیده گرفتن...`);
+              isPostSent = true;
+              duplicateCount++;
+            }
+          }
+          
+          // Send post if not a duplicate
+          if (!isPostSent) {
+            // Shorter delay for breaking news
+            const sendDelay = post.isBreakingNews ? 1000 : 
+                             post.isHighPriorityContent ? 2000 : 
+                             DELAY_BETWEEN_POSTS;
+            
+            console.log(`ارسال پست با اولویت ${priorityName} از ${post.source}: ${post.title} (امتیاز کیفی: ${post.qualityEvaluation.qualityScore})`);
+            const success = await sendTelegramPost(post, env);
+            
+            if (success) {
+              // Save sent post data
+              const postData = {
+                title: post.title,
+                link: post.link,
+                source: post.source,
+                description: post.description ? post.description.substring(0, 300) : "",
+                qualityScore: post.qualityEvaluation.qualityScore || 0,
+                isBreakingNews: post.isBreakingNews || false,
+                isHighPriorityContent: post.isHighPriorityContent || false,
+                sentAt: new Date().toISOString()
+              };
+              
+              await markPostAsSent(post.uniqueIdentifier, env, postData);
+              
+              for (const additionalId of additionalIdentifiers) {
+                await markPostAsSent(additionalId, env, {
+                  referenceId: post.uniqueIdentifier,
+                  sentAt: new Date().toISOString()
+                });
+              }
+              
+              processedIdentifiers.add(post.uniqueIdentifier);
+              processedTitles.add(post.normalizedTitle);
+              successCount++;
+              await delay(sendDelay);
+              return true;
+            } else {
+              failureCount++;
+              return false;
+            }
+          } else {
+            console.log(`پست قبلاً ارسال شده است: ${post.title}`);
+            return false;
+          }
+        })();
+        
+        postPromises.push(postPromise);
+        
+        // Wait for the current post to be processed before moving to the next
+        // This ensures posts are sent in order of priority
+        await postPromise;
       }
+      
+      // Wait for all posts to be processed
+      await Promise.all(postPromises);
       
       return allPosts.length;
     };
     
-    // پردازش فیدها به ترتیب اولویت
-    // ابتدا پردازش فیدهای با اولویت بالا (سیاسی)
-    await processFeedsByPriority(highPriorityFeeds, "بالا (سیاسی)");
+    // Process feeds by priority:
+    // 1. High priority (political news) - lower quality threshold
+    await processFeedsByPriority(highPriorityFeeds, "بالا (سیاسی)", 3);
     
-    // سپس پردازش فیدهای با اولویت متوسط (اقتصادی)
-    await processFeedsByPriority(mediumPriorityFeeds, "متوسط (اقتصادی)");
+    // 2. Medium priority (economic news) - medium quality threshold
+    await processFeedsByPriority(mediumPriorityFeeds, "متوسط (اقتصادی)", 5);
     
-    // در نهایت پردازش فیدهای با اولویت پایین (کریپتو)
-    await processFeedsByPriority(lowPriorityFeeds, "پایین (کریپتو)");
+    // 3. Low priority (crypto news) - higher quality threshold
+    await processFeedsByPriority(lowPriorityFeeds, "پایین (کریپتو)", 6);
     
-    // گزارش نهایی
+    // Final report
     console.log("\n--- گزارش نهایی پردازش فیدها ---");
     console.log(`تعداد پست‌های ارسال شده: ${successCount}`);
     console.log(`تعداد پست‌های تکراری: ${duplicateCount}`);
@@ -2296,492 +2263,51 @@ function calculateSimilarity(text1, text2) {
   return commonWords / uniqueWords.size;
 }
 
-// تابع جدید برای ارزیابی کیفیت محتوا
+// Function to evaluate content quality - SIMPLIFIED
 function evaluateContentQuality(post) {
   try {
-    // اگر محتوا یا عنوان خالی باشد، کیفیت پایین است
+    // Basic validation
     if (!post.title || !post.description || post.title.trim().length === 0 || post.description.trim().length === 0) {
-      console.log(`پست "${post.title || 'بدون عنوان'}" به دلیل نداشتن محتوا یا عنوان کافی رد شد`);
-      return { 
-        isHighQuality: false, 
-        reason: "محتوا یا عنوان ناکافی" 
-      };
+      return { isHighQuality: false, reason: "محتوا یا عنوان ناکافی" };
     }
 
-    // ⭐️ فیلتر جدید: رد کردن مطالب نامرتبط با موضوع اصلی کانال
-    // لیست موضوعات ممنوعه و غیرمرتبط با کانال
-    const prohibitedTopics = [
-      // محصولات و کالاهای مصرفی
-      "لوازم آرایش", "آرایشی", "آرایش", "لاک", "رژ لب", "فاندیشن", "ریمل", "کرم", "شامپو", 
-      "لوسیون", "مراقبت پوست", "اسکراب", "مرطوب کننده", "ضد آفتاب", "ماسک صورت",
-      
-      // غذا و نوشیدنی
-      "دستور پخت", "آشپزی", "رستوران", "پیتزا", "فست فود", "غذاخوری", "کافه", "کافی شاپ",
-      "نوشیدنی", "دسر", "شیرینی", "کیک", "بستنی", "طرز تهیه", "آرد", "روغن", "خرید توافقی",
-      "برنج", "گندم", "پیاز", "سیب زمینی", "میوه", "سبزیجات", "کشاورزی",
-      
-      // مد و لباس
-      "لباس", "پوشاک", "کفش", "کیف", "اکسسوری", "زیورآلات", "مد", "فشن", "استایل", "طراحی لباس",
-      
-      // سرگرمی غیرمرتبط
-      "بازی", "سینما", "فیلم", "موسیقی", "کنسرت", "تفریح", "سرگرمی", "بازیگر", "خواننده", 
-      "هنرمند", "هنرپیشه", "شوی تلویزیونی", "سریال", "شبکه نمایش خانگی",
-      
-      // ورزش و تناسب اندام
-      "فوتبال", "والیبال", "بسکتبال", "تناسب اندام", "فیتنس", "بدنسازی", "یوگا", "ایروبیک",
-      "باشگاه", "ورزشگاه", "استادیوم", "مسابقه", "لیگ", "جام", "دوپینگ", "مدال", "قهرمانی",
-      
-      // سلامت غیرمرتبط
-      "سلامت", "بیماری", "درمان", "دارو", "مکمل", "ویتامین", "رژیم غذایی", "لاغری", "چاقی",
-      "پزشک", "دندانپزشک", "روانشناس", "داروخانه", "بهداشت", "کرونا", "واکسن",
-      
-      // حوادث محلی و اخبار شهرستانی
-      "تصادف", "حادثه", "سانحه", "آتش‌سوزی", "سیل", "زلزله", "طوفان", "خسارت", "کشته", "مصدوم",
-      "زخمی", "اورژانس", "هلال احمر", "آتش‌نشانی", "آمبولانس", "بیمارستان", "نجات", "امداد",
-      "امدادگر", "آمبولانس", "آتش‌نشان", "نیروهای امدادی", "نیروی انتظامی", "پلیس",
-      
-      // اخبار محلی و شهرستانی
-      "شهرداری", "شهردار", "شورای شهر", "استانداری", "استاندار", "فرمانداری", "فرماندار",
-      "بخشداری", "بخشدار", "دهیاری", "دهیار", "شهرستان", "روستا", "دهستان",
-      
-      // مسائل جزئی و غیر استراتژیک داخلی
-      "مدارس", "دانش‌آموز", "معلم", "کلاس درس", "آموزش و پرورش", "طرح ترافیک",
-      "شهرک صنعتی", "صنایع دستی", "اداره کل", "بنیاد مسکن", "هنرستان", "مدرسه", 
-      "کنکور", "امتحانات", "آزمون", "دانشگاه آزاد", "علوم پزشکی", "آب و فاضلاب",
-      "مخابرات", "قبض", "یارانه", "سهمیه", "ترافیک", "عوارض", "مالیات بر ارزش افزوده",
-      
-      // موارد دیگر
-      "توصیه", "چگونه", "آموزش", "ترفند", "راهنمای", "نحوه"
+    // SPORTS NEWS FILTER - CRITICAL TO KEEP
+    const sportsKeywords = [
+      "فوتبال", "فوتسال", "والیبال", "بسکتبال", "کشتی", "تکواندو", "جودو", 
+      "تیم ملی", "مسابقه", "لیگ", "جام", "قهرمانی", "مدال", "ورزش", "گل", 
+      "شکست خورد", "پیروز شد", "تساوی", "فینال", "استقلال", "پرسپولیس"
     ];
     
-    // بررسی عنوان و محتوا برای موضوعات ممنوعه
-    for (const topic of prohibitedTopics) {
-      // بررسی دقیق‌تر با درنظر گرفتن اینکه کلمه به تنهایی در متن باشد (نه بخشی از یک کلمه دیگر)
-      const topicRegex = new RegExp(`\\b${topic}\\b`, 'i');
-      
-      if (topicRegex.test(post.title) || topicRegex.test(post.description)) {
-        // بررسی اینکه آیا این موضوع ممنوعه در یک بافت سیاسی یا اقتصادی مهم به کار رفته است
-        // مثلاً "تحریم دارو" موضوعی سیاسی است، نه پزشکی
-        const hasPoliticalContext = (
-          post.title.includes("تحریم") || 
-          post.title.includes("سیاست") || 
-          post.title.includes("دولت") || 
-          post.title.includes("وزیر") ||
-          post.title.includes("قانون") ||
-          post.title.includes("مجلس") ||
-          post.title.includes("رئیس جمهور")
-        );
-        
-        const hasEconomicContext = (
-          post.title.includes("اقتصاد") || 
-          post.title.includes("بازار") || 
-          post.title.includes("ارز") || 
-          post.title.includes("تورم") ||
-          post.title.includes("بانک") ||
-          post.title.includes("قیمت") ||
-          post.title.includes("بورس")
-        );
-        
-        const hasInternationalContext = (
-          post.title.includes("بین‌المللی") ||
-          post.title.includes("جهانی") ||
-          post.title.includes("اروپا") ||
-          post.title.includes("آمریکا") ||
-          post.title.includes("روسیه") ||
-          post.title.includes("چین") ||
-          post.title.includes("خاورمیانه")
-        );
-        
-        // اگر بافت سیاسی یا اقتصادی یا بین‌المللی نداشت، پست را رد کنیم
-        if (!hasPoliticalContext && !hasEconomicContext && !hasInternationalContext) {
-          console.log(`پست "${post.title}" به دلیل موضوع نامرتبط "${topic}" رد شد`);
-          return {
-            isHighQuality: false,
-            reason: `موضوع نامرتبط با کانال (${topic})`
-          };
-        }
-      }
-    }
-
-    // فیلتر ویژه برای اخبار محلی شهرستان‌ها
-    // شناسایی الگوی "نام شهر - خبرگزاری" که معمولاً نشان‌دهنده خبر محلی غیرمهم است
-    if (post.title.match(/^[\u0600-\u06FF]+[\s]*[-–][\s]*(?:ایرنا|ایسنا|فارس|مهر|تسنیم)/i) ||
-        post.description.match(/^[\u0600-\u06FF]+[\s]*[-–][\s]*(?:ایرنا|ایسنا|فارس|مهر|تسنیم)/i)) {
-      // بررسی اینکه آیا این خبر با وجود داشتن فرمت محلی، موضوع بین‌المللی یا اقتصادی مهم دارد
-      const isImportantInternationalNews = (
-        post.title.includes("آمریکا") || 
-        post.title.includes("روسیه") || 
-        post.title.includes("چین") ||
-        post.title.includes("اروپا") || 
-        post.title.includes("ناتو") ||
-        post.title.includes("سازمان ملل") ||
-        post.title.includes("اتحادیه اروپا") ||
-        post.title.includes("هسته‌ای") ||
-        post.title.includes("تحریم")
-      );
-      
-      // اگر موضوع مهم بین‌المللی نیست، خبر را رد کنیم
-      if (!isImportantInternationalNews) {
-        console.log(`پست "${post.title}" به دلیل خبر محلی شهرستانی رد شد`);
+    for (const keyword of sportsKeywords) {
+      const keywordRegex = new RegExp(`\\b${keyword}\\b`, 'i');
+      if (keywordRegex.test(post.title)) {
         return {
           isHighQuality: false,
-          reason: "خبر محلی شهرستانی غیرمهم"
+          reason: `موضوع ورزشی (${keyword}) با کانال اخبار سیاسی، اقتصادی و رمزارزی همخوانی ندارد`
         };
       }
     }
-
-    // ⭐️ فیلتر جدید: افزایش کیفیت هشتگ‌های انتخابی
-    // بررسی ناسازگاری بین عنوان و هشتگ‌ها (مشکل کلاسیک محتوای زرد)
-    if (post.title) {
-      const irrelevantHashtags = [
-        "هند", "پاکستان", "چین", "روسیه", "آمریکا", "طلا", "نفت", "گاز", 
-        "سیاست", "وزیر", "انتخابات", "اقتصاد", "ارز", "دلار"
-      ];
-      
-      let hasMismatchingHashtags = false;
-      
-      for (const hashtag of irrelevantHashtags) {
-        const hashtagRegex = new RegExp(`\\b${hashtag}\\b`, 'i');
-        
-        // اگر هشتگ در عنوان نیست اما در متن هشتگ استفاده شده، این یک ناسازگاری است
-        if (!hashtagRegex.test(post.title) && 
-            !hashtagRegex.test(post.description && post.description.substring(0, 200)) && 
-            post.hashtags && post.hashtags.includes(hashtag)) {
-          hasMismatchingHashtags = true;
-          console.log(`پست "${post.title}" دارای هشتگ نامرتبط "${hashtag}" است`);
-        }
-      }
-      
-      if (hasMismatchingHashtags) {
-        console.log(`پست "${post.title}" به دلیل هشتگ‌های نامرتبط رد شد`);
+    
+    // ENTERTAINMENT NEWS FILTER - Also reject celebrity news and entertainment
+    const entertainmentKeywords = [
+      "سینما", "بازیگر", "فیلم", "سریال", "موسیقی", "خواننده", "هنرمند", 
+      "کنسرت", "اینستاگرام", "کلیپ", "مد", "لباس", "آرایش", "جشنواره"
+    ];
+    
+    for (const keyword of entertainmentKeywords) {
+      const keywordRegex = new RegExp(`\\b${keyword}\\b`, 'i');
+      if (keywordRegex.test(post.title)) {
         return {
           isHighQuality: false,
-          reason: "هشتگ‌های نامرتبط با محتوا"
+          reason: `موضوع سرگرمی (${keyword}) با کانال اخبار سیاسی، اقتصادی و رمزارزی همخوانی ندارد`
         };
       }
     }
 
-    // ابتدا اولویت‌های کانال را بررسی کنیم
-    // شناسایی محتوای مرتبط با اولویت‌های کانال (سیاست، اقتصاد، رمزارز) به ترتیب اولویت
-    const priorityKeywords = {
-      politics: [
-        "مذاکره", "سیاست", "دولت", "وزیر", "مجلس", "رئیس جمهور", "انتخابات", "رهبر", 
-        "نماینده", "قانون", "دیپلماسی", "بین‌الملل", "تحریم", "آمریکا", "ایران", "چین", 
-        "روسیه", "اروپا", "برجام", "هسته‌ای", "نظامی", "FATF", "بیانیه", "توافق", "رای",
-        "سیاسی", "دیپلماتیک", "سازمان ملل", "شورای امنیت", "اوپک", "نفت", "کنگره", "پارلمان",
-        "جمهوری", "سفیر", "پرزیدنت", "کنفرانس", "اجلاس", "سخنگو", "سخنران", "مقام",
-        "اتحادیه اروپا", "ناتو", "پیمان", "کرملین", "کاخ سفید", "پنتاگون", "وزارت خارجه",
-        "وزارت دفاع", "استراتژیک", "حق وتو", "قطعنامه", "قدرت‌های بزرگ", "بحران", 
-        "خاورمیانه", "ژئوپلیتیک", "تنش", "روابط", "حمله", "تسلیحات", "موشک", "پهپاد",
-        "جنگ", "صلح", "آتش‌بس", "امنیت", "سیاست خارجی", "منافع ملی", "استقلال", "حاکمیت",
-        "حقوق بشر", "اوکراین", "غزه", "فلسطین", "اسرائیل", "عربستان", "ترکیه", "سوریه", "لبنان", "عراق",
-        "افغانستان", "پوتین", "بایدن", "شی جین پینگ", "ماکرون", "اردوغان", "نتانیاهو"
-      ],
-      economy: [
-        "اقتصاد", "بانک مرکزی", "بازار", "بورس", "دلار", "یورو", "سکه", "طلا", "قیمت", 
-        "تورم", "رکود", "رشد اقتصادی", "بدهی", "بودجه", "مالیات", "یارانه", "بانک", 
-        "ارز", "پول", "سرمایه‌گذاری", "صادرات", "واردات", "نرخ", "بازار سرمایه", "صنعت",
-        "ذخایر", "خزانه", "سود", "شاخص", "تولید", "ناخالص داخلی", "GDP", "سهام", "معیشت",
-        "خصوصی‌سازی", "تجارت", "تراز تجاری", "بازرگانی", "اوراق", "استاندارد اند پورز",
-        "وال استریت", "نزدک", "داوجونز", "فدرال رزرو", "بانک جهانی", "صندوق بین‌المللی",
-        "فارکس", "جهانی‌سازی", "اقتصاد جهانی", "بحران اقتصادی", "رقابت‌پذیری",
-        "تعرفه", "توافق تجاری", "نرخ بهره", "سرمایه‌گذاری خارجی", "منابع ارزی",
-        "بازارهای جهانی", "قیمت جهانی", "شاخص‌های جهانی", "انرژی", "اوپک پلاس",
-        "سوئیفت", "تحریم اقتصادی", "دور زدن تحریم", "مبادلات مالی"
-      ],
-      crypto: [
-        "بیت کوین", "بیتکوین", "اتریوم", "ارز دیجیتال", "رمزارز", "بلاک چین", "بلاکچین",
-        "کریپتو", "توکن", "استیبل کوین", "استیبل", "کاردانو", "سولانا", "NFT", "دیفای",
-        "صرافی ارز دیجیتال", "کیف پول", "ولت", "تتر", "شیبا", "دوج کوین", "لایتکوین", "ترون",
-        "وب 3", "متاورس", "قرارداد هوشمند", "پروتکل", "ماینینگ", "استخراج", "وایت پیپر",
-        "آلتکوین", "بایننس", "کوین‌بیس", "هش ریت", "بی‌ان‌بی", "پولکادات", "سیف مون", "آواکس",
-        "کریپتو پانک", "ان‌اف‌تی", "عرضه اولیه سکه", "آی‌سی‌او", "پامپ", "دامپ", "هودل",
-        "فیر لانچ", "سوپاپ ایردراپ", "باینری آپشن", "ترید", "سیگنال", "تحلیل تکنیکال",
-        "اسپات", "مارجین", "فیوچرز", "لونگ", "شورت", "مون", "هاوینگ", "سگکوین", "یونی‌سواپ"
-      ],
-      international: [
-        "بین‌المللی", "جهانی", "قدرت‌های جهانی", "روابط بین‌الملل", "دیپلماسی جهانی",
-        "سازمان ملل متحد", "شورای امنیت", "جامعه جهانی", "حقوق بین‌الملل", "قوانین بین‌المللی",
-        "معاهده بین‌المللی", "پیمان بین‌المللی", "صلح جهانی", "امنیت جهانی", "جنگ جهانی",
-        "بحران جهانی", "تغییرات اقلیمی", "گرمایش زمین", "تروریسم بین‌المللی", "دادگاه بین‌المللی",
-        "سازمان تجارت جهانی", "اتحادیه اروپا", "یورو", "ناتو", "گروه ۲۰", "گروه ۸", "گروه ۷",
-        "سران جهان", "نشست بین‌المللی", "کنفرانس بین‌المللی", "اختلافات مرزی", "مهاجرت",
-        "پناهندگی", "کمک‌های بین‌المللی", "نظام بین‌الملل", "نظم جهانی", "چندجانبه‌گرایی",
-        "فرامرزی", "ائتلاف بین‌المللی", "تحریم بین‌المللی", "انرژی هسته‌ای", "منع گسترش سلاح‌های هسته‌ای"
-      ]
-    };
-
-    // بررسی اولویت‌ها در عنوان (امتیاز بیشتر) و محتوا
-    // امتیازدهی با اولویت سیاست > اقتصاد > رمزارز
-    const categoryScores = {
-      politics: 0,
-      economy: 0, 
-      crypto: 0,
-      international: 0
-    };
-    
-    let categoryFound = false;
-    
-    // بررسی در عنوان (امتیاز بیشتر)
-    for (const category in priorityKeywords) {
-      for (const keyword of priorityKeywords[category]) {
-        if (post.title.includes(keyword)) {
-          categoryScores[category] += 3;
-          categoryFound = true;
-        }
-      }
-    }
-    
-    // بررسی در محتوا (امتیاز کمتر)
-    for (const category in priorityKeywords) {
-      for (const keyword of priorityKeywords[category]) {
-        if (post.description.includes(keyword)) {
-          categoryScores[category] += 1;
-          categoryFound = true;
-        }
-      }
-    }
-    
-    // بررسی نشانه‌های اخبار محلی و شهرستانی
-    const localNewsIndicators = [
-      { pattern: /^[\u0600-\u06FF]+[\s]*[-–][\s]*(?:ایرنا|ایسنا|فارس|مهر|تسنیم)/i, score: -10 },
-      { pattern: /اورژانس/i, score: -5 },
-      { pattern: /هلال احمر/i, score: -5 },
-      { pattern: /آتش‌نشانی/i, score: -5 },
-      { pattern: /شهرداری/i, score: -3 },
-      { pattern: /استانداری/i, score: -3 },
-      { pattern: /فرمانداری/i, score: -3 },
-      { pattern: /تصادف/i, score: -5 },
-      { pattern: /حادثه/i, score: -3 },
-      { pattern: /مصدوم/i, score: -5 },
-      { pattern: /کشته/i, score: -3 },
-      { pattern: /زخمی/i, score: -3 },
-      { pattern: /مدارس/i, score: -2 },
-      { pattern: /آموزش و پرورش/i, score: -2 }
-    ];
-    
-    let localNewsScore = 0;
-    for (const indicator of localNewsIndicators) {
-      if (indicator.pattern.test(post.title) || indicator.pattern.test(post.description.substring(0, 200))) {
-        localNewsScore += indicator.score;
-      }
-    }
-    
-    // بررسی نشانه‌های اخبار سیاسی بین‌المللی مهم
-    const importantInternationalIndicators = [
-      { pattern: /سازمان ملل/i, score: 5 },
-      { pattern: /شورای امنیت/i, score: 5 },
-      { pattern: /اتحادیه اروپا/i, score: 4 },
-      { pattern: /وزارت خارجه/i, score: 4 },
-      { pattern: /کاخ سفید/i, score: 4 },
-      { pattern: /کرملین/i, score: 4 },
-      { pattern: /پنتاگون/i, score: 4 },
-      { pattern: /ناتو/i, score: 5 },
-      { pattern: /تحریم/i, score: 4 },
-      { pattern: /هسته‌ای/i, score: 4 },
-      { pattern: /توافق/i, score: 3 },
-      { pattern: /جنگ/i, score: 3 },
-      { pattern: /صلح/i, score: 3 },
-      { pattern: /بحران/i, score: 3 },
-      { pattern: /بین‌المللی/i, score: 4 },
-      { pattern: /جهانی/i, score: 3 }
-    ];
-    
-    let internationalScore = 0;
-    for (const indicator of importantInternationalIndicators) {
-      if (indicator.pattern.test(post.title)) {
-        internationalScore += indicator.score;
-      } else if (indicator.pattern.test(post.description.substring(0, 200))) {
-        internationalScore += Math.floor(indicator.score / 2);
-      }
-    }
-    
-    // بررسی نشانه‌های اخبار اقتصادی مهم
-    const importantEconomicIndicators = [
-      { pattern: /بانک مرکزی/i, score: 4 },
-      { pattern: /بانک جهانی/i, score: 5 },
-      { pattern: /صندوق بین‌المللی/i, score: 5 },
-      { pattern: /تورم/i, score: 3 },
-      { pattern: /رکود/i, score: 3 },
-      { pattern: /رشد اقتصادی/i, score: 3 },
-      { pattern: /بازارهای جهانی/i, score: 4 },
-      { pattern: /قیمت جهانی/i, score: 3 },
-      { pattern: /اقتصاد جهانی/i, score: 5 },
-      { pattern: /وال استریت/i, score: 4 },
-      { pattern: /داوجونز/i, score: 4 },
-      { pattern: /نزدک/i, score: 4 },
-      { pattern: /فدرال رزرو/i, score: 5 }
-    ];
-    
-    let economicScore = 0;
-    for (const indicator of importantEconomicIndicators) {
-      if (indicator.pattern.test(post.title)) {
-        economicScore += indicator.score;
-      } else if (indicator.pattern.test(post.description.substring(0, 200))) {
-        economicScore += Math.floor(indicator.score / 2);
-      }
-    }
-    
-    // بررسی نشانه‌های اخبار کریپتو مهم
-    const importantCryptoIndicators = [
-      { pattern: /بیت ?کوین/i, score: 4 },
-      { pattern: /اتریوم/i, score: 4 },
-      { pattern: /ارز دیجیتال/i, score: 3 },
-      { pattern: /رمزارز/i, score: 3 },
-      { pattern: /بلاک ?چین/i, score: 3 },
-      { pattern: /هاوینگ/i, score: 5 },
-      { pattern: /کریپتو/i, score: 3 },
-      { pattern: /صرافی ارز دیجیتال/i, score: 3 }
-    ];
-    
-    let cryptoScore = 0;
-    for (const indicator of importantCryptoIndicators) {
-      if (indicator.pattern.test(post.title)) {
-        cryptoScore += indicator.score;
-      } else if (indicator.pattern.test(post.description.substring(0, 200))) {
-        cryptoScore += Math.floor(indicator.score / 2);
-      }
-    }
-    
-    // تشخیص منبع کریپتویی
-    const isCryptoSource = post.source && (
-      post.source.includes("Crypto") || 
-      post.source.includes("Arz") || 
-      post.source.includes("Ramzarz") ||
-      post.source.includes("Coin") ||
-      post.source.includes("Blockchain")
-    );
-    
-    // اگر موضوع مهم بین‌المللی یا اقتصادی یا کریپتو دارد، از امتیاز منفی خبر محلی کاسته می‌شود
-    if (internationalScore > 8 || economicScore > 8 || cryptoScore > 8 || 
-        categoryScores.international > 6 || categoryScores.politics > 9) {
-      localNewsScore = Math.max(localNewsScore, -3); // کاهش تأثیر منفی نشانه‌های محلی
-    }
-    
-    // ⭐️ تغییر مهم: افزایش آستانه امتیاز برای مطالب غیرمرتبط و عدم ارتباط با اولویت‌ها
-    // اگر محتوا با هیچ یک از اولویت‌های کانال مرتبط نیست و از منابع کریپتویی هم نیست، آن را رد کنیم
-    const priorityScore = (categoryScores.politics * 1.5) + (categoryScores.economy * 1.2) + 
-                         (categoryScores.crypto * 1.0) + (categoryScores.international * 1.8);
-                         
-    if (priorityScore < 5 && !categoryFound && !isCryptoSource) {
-      console.log(`پست "${post.title}" به دلیل عدم ارتباط کافی با اولویت‌های کانال رد شد (امتیاز: ${priorityScore})`);
-      return { 
-        isHighQuality: false, 
-        reason: "عدم ارتباط با اولویت‌های کانال" 
-      };
-    }
-    
-    // رد کردن اخبار با نشانه‌های قوی محلی و شهرستانی، مگر اینکه اخبار بین‌المللی بسیار مهم باشند
-    if (localNewsScore < -10 && internationalScore < 10 && economicScore < 10 && 
-        !post.title.includes("تحریم") && !post.title.includes("هسته‌ای")) {
-      console.log(`پست "${post.title}" به دلیل محتوای محلی غیرمهم رد شد (امتیاز محلی: ${localNewsScore})`);
-      return {
-        isHighQuality: false,
-        reason: "محتوای محلی غیرمهم با امتیاز پایین"
-      };
-    }
-
-    // بررسی عنوان برای محتوای چندرسانه‌ای که نمی‌توان در تلگرام ارسال کرد
-    const multimediaKeywords = [
-      "/ویدیو", "+ ویدیو", "(ویدیو)", "ویدئو", "ویدیویی", "ویدیو:", "ویدئو:",
-      "/فیلم", "+ فیلم", "(فیلم)", "فیلم:", "کلیپ", "کلیپ:", "/کلیپ",
-      "/جدول", "+ جدول", "(جدول)", "جدول:", "اینفوگرافیک", "اینفوگرافی", "اینفوگرافیک:",
-      "/عکس", "+ عکس", "(عکس)", "تصاویر:", "گالری", "گالری تصاویر",
-      "پادکست", "صوت", "/صوت", "+ صوت", "فایل صوتی",
-      "ویژه نامه", "ویژه‌نامه", "دانلود", "فایل PDF", "پی‌دی‌اف", "pdf"
-    ];
-
-    for (const keyword of multimediaKeywords) {
-      if (post.title.includes(keyword)) {
-        console.log(`پست "${post.title}" به دلیل اشاره به محتوای چندرسانه‌ای (${keyword}) در عنوان رد شد`);
-        return { 
-          isHighQuality: false, 
-          reason: "محتوای چندرسانه‌ای غیرقابل ارسال در تلگرام" 
-        };
-      }
-    }
-    
-    // بررسی بیشتر در محتوا برای اشاره به ویدیو یا محتوای چندرسانه‌ای
-    const multimediaContentPatterns = [
-      "مشاهده ویدیو", "ویدیوی کامل", "فیلم کامل", "دانلود ویدیو", "دانلود فیلم",
-      "جدول زیر", "طبق جدول", "مشاهده جدول", "طبق اینفوگرافیک", "مشاهده اینفوگرافیک",
-      "مشاهده تصاویر بیشتر", "گزارش تصویری", "تصاویر این خبر", "عکس‌های بیشتر",
-      "فایل صوتی این", "گوش دادن به", "دانلود فایل", "مشاهده نمودار"
-    ];
-    
-    for (const pattern of multimediaContentPatterns) {
-      if (post.description.includes(pattern)) {
-        console.log(`پست "${post.title}" به دلیل اشاره به محتوای چندرسانه‌ای در متن (${pattern}) رد شد`);
-        return { 
-          isHighQuality: false, 
-          reason: "اشاره به محتوای چندرسانه‌ای در متن" 
-        };
-      }
-    }
-
-    // شناسایی پست‌های آموزشی طولانی با فهرست مطالب
-    const tutorialKeywords = [
-      "آموزش کامل", "آموزش جامع", "راهنمای کامل", "آموزش گام به گام", 
-      "فهرست مطالب", "سرفصل", "همه چیز درباره", "جامع‌ترین", "کامل‌ترین",
-      "چگونه می‌توان", "آموزش:", "بررسی کامل", "بخش اول", "قسمت اول",
-      "بخش ۱", "قسمت ۱", "معرفی و راه‌اندازی", "مقدمه‌ای بر"
-    ];
-
-    for (const keyword of tutorialKeywords) {
-      if ((post.title && post.title.includes(keyword)) || 
-          (post.description && post.description.includes(keyword) && post.description.length > 1000)) {
-        console.log(`پست "${post.title}" به دلیل محتوای آموزشی طولانی (${keyword}) رد شد`);
-        return { 
-          isHighQuality: false, 
-          reason: "محتوای آموزشی طولانی" 
-        };
-      }
-    }
-
-    // شناسایی پست‌های با فهرست شماره‌دار یا بولت‌دار (نشانه پست آموزشی یا فهرست‌دار)
-    const listPatterns = [
-      /^[۰-۹0-9]+-.*?\n[۰-۹0-9]+-/m,   // الگوی رایج شماره‌گذاری فارسی و انگلیسی
-      /[۰-۹0-9]+\.\s.*?\n[۰-۹0-9]+\./m,  // الگوی شماره با نقطه
-      /•\s.*?\n•\s/m,  // بولت پوینت
-      /^\*\s.*?\n\*\s/m,  // ستاره به عنوان بولت
-      /^-\s.*?\n-\s/m   // خط تیره به عنوان بولت
-    ];
-
-    for (const pattern of listPatterns) {
-      if (pattern.test(post.description) && post.description.length > 800) {
-        console.log(`پست "${post.title}" به دلیل داشتن فهرست شماره‌دار یا بولت‌دار رد شد`);
-        return { 
-          isHighQuality: false, 
-          reason: "محتوای فهرست‌دار طولانی" 
-        };
-      }
-    }
-
-    // بررسی کلمات کلیدی تبلیغاتی و محتوای زرد
-    const spamKeywords = [
-      "اینستاگرام دنبال کنید", "تلگرام دنبال کنید", "فیسبوک دنبال کنید", "توییتر دنبال کنید",
-      "برای دریافت اخبار بیشتر", "برای اطلاعات بیشتر کلیک کنید", "لینک زیر را کلیک کنید",
-      "اسپانسر", "تبلیغات", "پروموشن", "فالو کنید", "لایک کنید", "به اشتراک بگذارید",
-      "چگونه پولدار شویم", "درآمد میلیونی", "درآمد دلاری", "کسب درآمد آسان",
-      "سود تضمینی", "سودهای نجومی", "پول پارو کردن", "به سرعت پولدار شوید"
-    ];
-
-    for (const keyword of spamKeywords) {
-      if (post.description.includes(keyword) || post.title.includes(keyword)) {
-        console.log(`پست "${post.title}" به دلیل داشتن محتوای تبلیغاتی رد شد (کلمه کلیدی: ${keyword})`);
-        return { 
-          isHighQuality: false, 
-          reason: "محتوای تبلیغاتی یا نامناسب" 
-        };
-      }
-    }
-
-    // ⭐️ تغییر مهم: بررسی خبرهای کوتاه اما کامل (اولویت اخبار فوری)
-    // شناسایی اخبار فوری و کوتاه برای ارسال با اولویت بالا
+    // Detect breaking news (high priority)
     const breakingNewsKeywords = [
-      "فوری", "اخبار فوری", "خبر فوری", "گزارش فوری", "اعلام شد", "تازه‌ترین خبر",
-      "لحظاتی پیش", "همین الان", "دقایقی پیش", "ساعتی پیش", "امروز اعلام شد",
-      "هم‌اکنون", "سریعاً", "بلافاصله", "عاجل", "خبر مهم"
+      "فوری", "اخبار فوری", "خبر فوری", "لحظاتی پیش", "همین الان", "عاجل", "خبر مهم",
+      "هم‌اکنون", "خبر لحظه‌ای", "توجه", "آخرین خبر", "هشدار"
     ];
     
     let isBreakingNews = false;
@@ -2791,173 +2317,321 @@ function evaluateContentQuality(post) {
         break;
       }
     }
+
+    // High priority political/international news - EXPANDED
+    const highPriorityKeywords = [
+      // سیاسی و بین‌المللی
+      "رئیس جمهور", "وزیر خارجه", "شورای امنیت", "سازمان ملل", "جنگ", "حمله", "تحریم", 
+      "هسته‌ای", "برجام", "مذاکرات", "توافق", "بیانیه", "اعلامیه", "حمله نظامی", 
+      "حمله موشکی", "انتخابات", "کنگره", "پارلمان", "سفیر", "دیپلمات", "سفارت",
+      "اعتراض", "تظاهرات", "نخست وزیر", "ترور", "کودتا", "تعلیق", "اخراج",
+      
+      // اقتصادی و مالی مهم
+      "نفت", "اوپک", "بانک مرکزی", "تورم", "رکود", "بحران اقتصادی", "سقوط ارزش",
+      "افزایش قیمت", "کاهش قیمت", "دلار", "یورو", "نرخ ارز", "افزایش شدید",
+      "کاهش شدید", "بازار سرمایه", "بورس", "سهام", 
+      
+      // کریپتو - اخبار مهم
+      "بیت کوین", "اتریوم", "ارز دیجیتال", "سقوط رمزارز", "افزایش قیمت بیت کوین",
+      "هک صرافی", "تصویب قانون", "رگولاتوری"
+    ];
     
-    // تشخیص اخبار کوتاه از طریق ساختار عنوان
-    const isNewsStyleTitle = /^[^:]+?(?:گفت|اعلام کرد|خبر داد|اظهار داشت|تأکید کرد):/.test(post.title);
-    
-    // خبرهای کوتاه با ساختار استاندارد خبری و اولویت بالا
-    const isShortNews = (post.description.length < 500 && (isBreakingNews || isNewsStyleTitle || priorityScore >= 5));
-
-    // ⭐️ تغییر مهم: خبرهای طولانی که نمی‌توان در تلگرام نمایش داد باید رد شوند
-    // کاهش محدودیت طول برای محتوای طولانی از 4000 به 3800 کاراکتر
-    if (post.description.length > 3800 && !isBreakingNews) {
-      console.log(`پست "${post.title}" به دلیل محتوای بسیار طولانی (${post.description.length} کاراکتر) رد شد`);
-      return { 
-        isHighQuality: false, 
-        reason: "محتوای بسیار طولانی برای تلگرام" 
-      };
-    }
-
-    // بررسی جامعیت محتوا برای اخباری که کوتاه نیستند
-    const paragraphs = post.description.split("\n\n").filter(p => p.trim().length > 0);
-    
-    // اخبار کوتاه نیازی به بررسی تعداد پاراگراف ندارند
-    if (paragraphs.length < 2 && !isShortNews && post.description.length > 600) {
-      console.log(`پست "${post.title}" به دلیل نداشتن ساختار پاراگراف‌بندی مناسب رد شد`);
-      return { 
-        isHighQuality: false, 
-        reason: "ساختار ضعیف محتوا" 
-      };
-    }
-
-    // بررسی وجود لینک‌های خارجی زیاد در محتوا
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    const urls = post.description.match(urlRegex) || [];
-    if (urls.length > 3) {
-      console.log(`پست "${post.title}" به دلیل داشتن تعداد زیاد لینک خارجی (${urls.length}) رد شد`);
-      return { 
-        isHighQuality: false, 
-        reason: "تعداد زیاد لینک خارجی" 
-      };
-    }
-
-    // بررسی تکرار بیش از حد کلمات
-    const words = post.description.toLowerCase().split(/\s+/);
-    const wordFrequency = {};
-    words.forEach(word => {
-      if (word.length > 3) {
-        wordFrequency[word] = (wordFrequency[word] || 0) + 1;
+    let isHighPriorityContent = isBreakingNews;
+    if (!isHighPriorityContent) {
+      for (const keyword of highPriorityKeywords) {
+        if (post.title.includes(keyword)) {
+          // بررسی عمیق‌تر: آیا واقعاً خبر مهمی است؟
+          // اگر کلمات کلیدی مانند "افزایش" یا "کاهش" داریم، باید عدد یا درصد هم داشته باشیم
+          if (keyword.includes("افزایش") || keyword.includes("کاهش") || keyword.includes("سقوط")) {
+            // جستجوی عدد یا درصد در عنوان یا 100 کاراکتر اول محتوا
+            const hasNumber = /\d+/.test(post.title) || 
+                             /\d+/.test(post.description.substring(0, 100)) ||
+                             /درصد/.test(post.title) ||
+                             /درصد/.test(post.description.substring(0, 100));
+            
+            if (hasNumber) {
+              isHighPriorityContent = true;
+              break;
+            }
+          } else {
+            isHighPriorityContent = true;
+            break;
+          }
+        }
       }
-    });
+    }
 
-    const repeatedWords = Object.keys(wordFrequency).filter(word => wordFrequency[word] > 5);
-    if (repeatedWords.length > 5) {
-      console.log(`پست "${post.title}" به دلیل تکرار بیش از حد کلمات رد شد`);
-      return { 
-        isHighQuality: false, 
-        reason: "تکرار بیش از حد کلمات" 
+    // Verify political/international news is significant
+    // Many posts mention politicians but aren't significant news
+    if (isHighPriorityContent && !isBreakingNews) {
+      // Look for keywords that indicate insignificance
+      const insignificanceIndicators = [
+        "تبریک گفت", "تسلیت گفت", "اظهار داشت", "گفتگو کرد", "دیدار کرد", 
+        "تاکید کرد", "بیان کرد", "بازدید", "افتتاح"
+      ];
+      
+      for (const indicator of insignificanceIndicators) {
+        if (post.title.includes(indicator)) {
+          isHighPriorityContent = false; // Downgrade from high priority
+          break;
+        }
+      }
+    }
+
+    // CORE MISSION CHECK: politics, economy, crypto - strengthened
+    const missionKeywords = {
+      politics: [
+        "سیاست", "دولت", "مجلس", "وزیر", "رئیس جمهور", "انتخابات", "تحریم", "مذاکره",
+        "بین‌الملل", "دیپلماسی", "جنگ", "صلح", "توافق", "معاهده", "سیاست خارجی", "روابط"
+      ],
+      economy: [
+        "اقتصاد", "بازار", "بورس", "ارز", "دلار", "یورو", "تورم", "بانک", "قیمت",
+        "معاملات", "سهام", "سکه", "طلا", "تجارت", "صادرات", "واردات", "تعرفه", "مالیات"
+      ],
+      crypto: [
+        "بیت کوین", "رمزارز", "ارز دیجیتال", "بلاک چین", "اتریوم", "توکن", "شیبا",
+        "دوج کوین", "سولانا", "کاردانو", "استیبل کوین", "صرافی رمزارز", "ماینینگ", "استخراج"
+      ]
+    };
+    
+    let missionRelevance = false;
+    let relevantCategory = "";
+    
+    for (const category in missionKeywords) {
+      for (const keyword of missionKeywords[category]) {
+        const keywordRegex = new RegExp(`\\b${keyword}\\b`, 'i');
+        if (keywordRegex.test(post.title) || keywordRegex.test(post.description.substring(0, 300))) {
+          missionRelevance = true;
+          relevantCategory = category;
+          break;
+        }
+      }
+      if (missionRelevance) break;
+    }
+    
+    // Crypto source check
+    const isCryptoSource = post.source && (
+      post.source.includes("Crypto") || 
+      post.source.includes("Ramzarz") || 
+      post.source.includes("Arz Digital") ||
+      post.source.includes("Tejarat") ||
+      post.source.includes("Coin")
+    );
+    
+    // For crypto sources, be stricter on content quality
+    if (isCryptoSource && !isHighPriorityContent) {
+      // Check if content has educational or analytical value
+      const cryptoAnalysisKeywords = [
+        "تحلیل", "پیش‌بینی", "چشم‌انداز", "سرمایه‌گذاری", "سود", "ضرر", "مقاومت", "حمایت",
+        "الگو", "نمودار", "روند", "صعودی", "نزولی", "بازار", "قیمت"
+      ];
+      
+      let hasAnalyticalValue = false;
+      for (const keyword of cryptoAnalysisKeywords) {
+        if (post.title.includes(keyword) || post.description.includes(keyword)) {
+          hasAnalyticalValue = true;
+          break;
+        }
+      }
+      
+      if (!hasAnalyticalValue) {
+        // اخبار غیرتحلیلی کریپتو اولویت کمتری دارند
+        relevantCategory = "low_crypto";
+      }
+    }
+    
+    // Main news sources get priority
+    const isMainNewsSource = post.source && (
+      post.source.includes("BBC") ||
+      post.source.includes("DW") || 
+      post.source.includes("Euronews")
+    );
+
+    // If no relevance to our mission and not from a crypto source, reject
+    if (!missionRelevance && !isCryptoSource && !isMainNewsSource && !isHighPriorityContent) {
+      return {
+        isHighQuality: false,
+        reason: "محتوا با رسالت اصلی کانال (اخبار سیاسی، اقتصادی، رمزارزی) ارتباطی ندارد"
       };
     }
 
-    // بررسی محتوای ناقص (پست‌هایی که با عبارات "ادامه مطلب" یا "..." تمام می‌شوند)
-    const incompleteEndings = [
-      "...", "ادامه دارد", "ادامه مطلب", "برای مطالعه ادامه مطلب", "مشروح خبر", 
-      "مشروح گزارش", "متن کامل", "بخوانید:", "بیشتر بخوانید", "برای مشاهده کامل", 
-      "برای دریافت", "برای دانلود", "برای مشاهده", "برای مطالعه", "در ادامه"
+    // Filter out multimedia content references
+    const multimediaKeywords = [
+      "/ویدیو", "(ویدیو)", "ویدیویی", "ویدیو:", "ویدئو:", "/فیلم", "(فیلم)", "فیلم:",
+      "کلیپ", "اینفوگرافیک", "(عکس)", "تصاویر:", "گالری", "پادکست", "صوت", "/صوت"
     ];
 
-    for (const ending of incompleteEndings) {
-      if (post.description.trim().endsWith(ending) || 
-          post.description.includes(ending + " " + "http") ||
-          post.description.includes(ending + "\n")) {
-        console.log(`پست "${post.title}" به دلیل ناقص بودن محتوا (${ending}) رد شد`);
+    for (const keyword of multimediaKeywords) {
+      if (post.title.includes(keyword)) {
         return { 
           isHighQuality: false, 
-          reason: "محتوای ناقص" 
+          reason: "محتوای چندرسانه‌ای غیرقابل ارسال در تلگرام" 
         };
       }
     }
 
-    // تشخیص خبری بودن محتوا (به جای محتوای تحلیلی طولانی)
-    const isNewsContent = (
-      post.title.length < 150 && 
-      (post.title.includes(":") || 
-       /^[^:]+?(?:گفت|اعلام کرد|خبر داد|اظهار داشت|تأکید کرد|افزود|اضافه کرد)/.test(post.title))
-    );
-
-    // امتیازدهی کلی به محتوا با توجه به اولویت‌ها
+    // Calculate final quality score - REFINED SCORING SYSTEM
     let qualityScore = 0;
     
-    // ⭐️ تغییر مهم: خبرهای فوری با اولویت بالاتر
+    // Breaking news gets highest priority 
     if (isBreakingNews) {
-      qualityScore += 6; // اخبار فوری ارزش بسیار بالایی دارند
-    } else if (isShortNews || isNewsContent) {
-      qualityScore += 4; // اخبار کوتاه و معمولی ارزش بالایی دارند
-    } else if (post.description.length >= 300 && post.description.length <= 3000) {
+      qualityScore += 10;
+    }
+    // High priority international/political content
+    else if (isHighPriorityContent) {
+      qualityScore += 8;
+    }
+    // Major news sources with relevant content
+    else if (isMainNewsSource && missionRelevance) {
+      qualityScore += 7;
+    }
+    // Major news sources (but not clearly relevant)
+    else if (isMainNewsSource) {
+      qualityScore += 5;
+    }
+    // Political/economic news from any source
+    else if (relevantCategory === "politics" || relevantCategory === "economy") {
+      qualityScore += 6;
+    }
+    // Crypto news with analytical value
+    else if (relevantCategory === "crypto" && isCryptoSource) {
+      qualityScore += 5;
+    }
+    // Crypto news without clear value
+    else if (relevantCategory === "low_crypto" || (isCryptoSource && !relevantCategory)) {
       qualityScore += 3;
-    } else if (post.description.length >= 100 && post.description.length < 300) {
-      qualityScore += 2;
+    }
+    // Other content with some relevance
+    else if (missionRelevance) {
+      qualityScore += 4;
     }
     
-    // امتیازدهی براساس دسته‌بندی و اولویت محتوا
-    // سیاست > اقتصاد > رمزارز
-    if (categoryScores.politics > 3) {
-      qualityScore += 4; // بالاترین اولویت
-    } else if (categoryScores.politics > 0) {
-      qualityScore += 3;
-    } else if (categoryScores.economy > 3) {
-      qualityScore += 3; // اولویت دوم
-    } else if (categoryScores.economy > 0) {
+    // Content length quality check - proper news articles should have sufficient content
+    if (post.description.length > 300 && post.description.length < 3000) {
       qualityScore += 2;
-    } else if (categoryScores.crypto > 3 || isCryptoSource) {
-      qualityScore += 2; // اولویت سوم
-    } else if (categoryScores.crypto > 0) {
+    } else if (post.description.length > 150 && post.description.length < 4000) {
       qualityScore += 1;
     }
     
-    // امتیاز برای داشتن تصویر
+    // Image is a plus for visual impact
     if (post.image && isValidUrl(post.image)) {
-      qualityScore += 2;
+      qualityScore += 1;
     }
     
-    // امتیاز برای تعداد پاراگراف‌ها (ساختار بهتر)
-    if (isShortNews) {
-      qualityScore += 2; // اخبار کوتاه معاف از نیاز به پاراگراف‌بندی هستند
-    } else {
-      qualityScore += Math.min(paragraphs.length, 4); // حداکثر 4 امتیاز
+    // Title quality check - good titles should be descriptive but concise
+    if (post.title.length > 15 && post.title.length < 120) {
+      qualityScore += 1;
     }
     
-    // ⭐️ تغییر مهم: آستانه متفاوت برای انواع مختلف خبر
-    let minScoreThreshold = 8; // آستانه پیش‌فرض
+    // Set appropriate threshold based on content type and source
+    let threshold = 5; // Default higher threshold to focus on truly important news
     
-    // خبرهای فوری یا بین‌المللی بسیار مهم با آستانه پایین‌تر
-    if (isBreakingNews || internationalScore > 12) {
-      minScoreThreshold = 6;
-    } else if (isShortNews) {
-      minScoreThreshold = 7; // آستانه برای اخبار کوتاه
-    } else if (categoryScores.politics > 6 || categoryScores.international > 6) {
-      minScoreThreshold = 7; // آستانه پایین‌تر برای اخبار سیاسی مهم
+    // Breaking news and high priority content get a lower threshold
+    if (isBreakingNews) {
+      threshold = 3;
+    } else if (isHighPriorityContent) {
+      threshold = 4;
     }
     
-    if (qualityScore < minScoreThreshold) {
-      console.log(`پست "${post.title}" به دلیل امتیاز کیفی پایین (${qualityScore}/20) رد شد`);
+    // Special threshold for crypto news (to limit volume)
+    if (isCryptoSource && !isBreakingNews && !isHighPriorityContent) {
+      threshold = 6; // Higher threshold for crypto to limit volume
+    }
+    
+    if (qualityScore < threshold) {
       return { 
         isHighQuality: false, 
-        reason: `امتیاز کیفی پایین (${qualityScore}/20)` 
+        reason: `امتیاز کیفی پایین (${qualityScore} از حداقل ${threshold} مورد نیاز)` 
       };
     }
     
-    console.log(`پست "${post.title}" با امتیاز کیفی ${qualityScore}/20 تأیید شد`);
     return {
       isHighQuality: true,
       qualityScore: qualityScore,
       reason: "محتوای با کیفیت و مرتبط",
-      isNews: isNewsContent || isShortNews,
+      isNews: true,
       isBreakingNews: isBreakingNews,
-      priorityCategories: {
-        politics: categoryScores.politics > 0,
-        economy: categoryScores.economy > 0,
-        international: categoryScores.international > 0,
-        crypto: categoryScores.crypto > 0 || isCryptoSource
-      }
+      isHighPriorityContent: isHighPriorityContent
     };
   } catch (error) {
     console.error(`خطا در ارزیابی کیفیت محتوا: ${error.message}`);
+    // In case of error, let it pass so we don't miss important news
     return { 
-      isHighQuality: false, 
-      reason: "خطا در ارزیابی کیفیت" 
+      isHighQuality: true, 
+      reason: "تأیید اتوماتیک به دلیل خطا در ارزیابی",
+      qualityScore: 5
     };
   }
+}
+
+// Function to find the best summary paragraph in news content
+function findNewsSummary(paragraphs, title) {
+  if (!paragraphs || paragraphs.length === 0) {
+    return "";
+  }
+  
+  // If there's only one paragraph, that's our summary
+  if (paragraphs.length === 1) {
+    return paragraphs[0];
+  }
+  
+  // Score each paragraph as a potential summary
+  const scoreParagraph = (paragraph, index) => {
+    let score = 0;
+    
+    // First paragraphs are more likely to be summaries
+    score += Math.max(5 - index, 0) * 3;
+    
+    // Length is important - not too short, not too long
+    if (paragraph.length > 100 && paragraph.length < 400) {
+      score += 5;
+    } else if (paragraph.length >= 50 && paragraph.length <= 500) {
+      score += 3;
+    }
+    
+    // Keywords that suggest this is a summary
+    const summaryKeywords = [
+      "گزارش", "به گزارش", "براساس", "طبق", "بنا بر", "اعلام کرد", "گفت", 
+      "اظهار داشت", "تاکید کرد", "خاطرنشان کرد", "با اشاره به", "افزود"
+    ];
+    
+    for (const keyword of summaryKeywords) {
+      if (paragraph.includes(keyword)) {
+        score += 2;
+        break;
+      }
+    }
+    
+    // Check if paragraph contains words from the title
+    const titleWords = title.split(/\s+/).filter(w => w.length > 3);
+    let titleWordMatches = 0;
+    
+    for (const word of titleWords) {
+      if (paragraph.includes(word)) {
+        titleWordMatches++;
+      }
+    }
+    
+    // Bonus if paragraph has words from the title
+    if (titleWords.length > 0) {
+      const matchRatio = titleWordMatches / titleWords.length;
+      score += matchRatio * 5;
+    }
+    
+    return score;
+  };
+  
+  // Score all paragraphs
+  const scoredParagraphs = paragraphs.map((p, i) => ({
+    paragraph: p,
+    score: scoreParagraph(p, i)
+  }));
+  
+  // Sort by score (highest first)
+  scoredParagraphs.sort((a, b) => b.score - a.score);
+  
+  // Return the highest scoring paragraph
+  return scoredParagraphs[0].paragraph;
 }
 
 // Worker export
