@@ -66,6 +66,23 @@ function sanitizeText(text) {
   text = text.replace(/اینترنت بدون سانسور با سایفون دویچه‌ وله/g, "");
   text = text.replace(/اینترنت بدون سانسور با سایفون/g, "");
   
+  // ⚡️ NEW: Enhanced Euronews promotional content cleanup
+  text = text.replace(/ایران زیرذره بین رسانه های خارجی.*/g, "");
+  text = text.replace(/زیرذره بین رسانه های خارجی.*/g, "");
+  text = text.replace(/می توانید نسخه مفصل تر آن را بخوانید.*/g, "");
+  text = text.replace(/می‌توانید نسخه مفصل‌تر آن را بخوانید.*/g, "");
+  text = text.replace(/می‌توانید در وبسایت ما بخوانید.*/g, "");
+  text = text.replace(/می‌توانید در صفحه اینستاگرام ما.*/g, "");
+  text = text.replace(/برای دیدن ویدیوی کامل این برنامه.*/g, "");
+  text = text.replace(/همچنین می‌توانید به صفحه اینستاگرام.*/g, "");
+  text = text.replace(/همچنین می‌توانید ویدیوی کامل.*/g, "");
+  text = text.replace(/ویدیوی کامل این گزارش را.*/g, "");
+  
+  // Remove phrases about "Iran under foreign media scrutiny"
+  text = text.replace(/.*نگاهی به آنچه رسانه‌های خارجی درباره ایران.*/g, "");
+  text = text.replace(/.*نگاهی به مهمترین تحلیل‌های رسانه‌های خارجی.*/g, "");
+  text = text.replace(/.*نگاهی به تحلیل‌های رسانه‌های خارجی درباره ایران.*/g, "");
+  
   // Remove Euronews promotional content
   text = text.replace(/یورونیوز در «سرخط خبرها» مهم‌ترین رویدادهای ایران و جهان را در دو نوبت مرور می‌کند.*/g, "");
   text = text.replace(/«مجله شامگاهی» برنامه‌ای تصویری از یورونیوز است که هر شب.*/g, "");
@@ -123,6 +140,17 @@ function sanitizeText(text) {
   text = text.replace(/دویچه وله فارسی \/ .*/g, "");
   text = text.replace(/بی‌بی‌سی فارسی \/ .*/g, "");
   text = text.replace(/یورونیوز فارسی \/ .*/g, "");
+  
+  // ⚡️ NEW: Remove content with mix of advertising and generic phrases
+  if (text.includes("بخوانید") && (text.includes("مفصل") || text.includes("کامل"))) {
+    const parts = text.split(/\.|؟|،|\n/);
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i].includes("بخوانید") && (parts[i].includes("مفصل") || parts[i].includes("کامل"))) {
+        parts[i] = "";
+      }
+    }
+    text = parts.filter(part => part.trim().length > 0).join(". ");
+  }
   
   // Ensure proper paragraph formatting with correct line breaks
   text = text.replace(/\.\s+([^a-z])/g, ".\n\n$1"); // Add double line break after periods followed by non-lowercase letter
@@ -649,6 +677,9 @@ async function isContentDuplicate(post, env) {
       .substring(0, 500) // افزایش به 500 کاراکتر برای تشخیص بهتر
       .trim()
       .toLowerCase();
+      
+    // NEW: Create a content hash for exact duplicate detection
+    const contentHash = simpleHash((cleanTitle || "") + (cleanDescription ? cleanDescription.substring(0, 200) : ""));
 
     // استخراج کلیدواژه‌های مهم از عنوان
     const titleWords = cleanTitle
@@ -682,7 +713,7 @@ async function isContentDuplicate(post, env) {
     
     // برای اخبار مهم و فوری آستانه را بالاتر می‌بریم تا به اشتباه فیلتر نشوند
     const isHighPriority = post.isBreakingNews || post.isHighPriorityContent;
-    
+
     // آستانه‌های متفاوت براساس نوع منبع و اهمیت خبر
     const titleThreshold = isHighPriority ? 0.85 : isCryptoSource ? 0.75 : 0.65;
     const descThreshold = isHighPriority ? 0.70 : isCryptoSource ? 0.55 : 0.45;
@@ -701,6 +732,18 @@ async function isContentDuplicate(post, env) {
         }
 
         if (storedValue.data && typeof storedValue.data === "object") {
+          // NEW: Check for exact content match by hash
+          if (storedValue.data.contentHash && storedValue.data.contentHash === contentHash) {
+            console.log(`محتوای دقیقا تکراری یافت شد با هش: ${contentHash}`);
+            return true;
+          }
+          
+          // Check for exact title match
+          if (storedValue.data.title && cleanTitle === storedValue.data.title.toLowerCase().trim()) {
+            console.log(`عنوان دقیقا تکراری یافت شد: "${storedValue.data.title}"`);
+            return true;
+          }
+          
           const storedTitle = storedValue.data.title || "";
           const storedSource = storedValue.data.source || "";
           
@@ -819,6 +862,20 @@ async function markPostAsSent(postIdentifier, env, postData = null) {
     
     // اطلاعات بیشتری را ذخیره کنیم
     const currentTime = new Date().toISOString();
+    
+    // If we have post data with title and description, generate contentHash
+    if (postData && postData.title) {
+      // Ensure clean versions for hash generation
+      const cleanTitle = postData.title.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
+        .trim().toLowerCase();
+      const cleanDesc = postData.description ? 
+        postData.description.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
+          .trim().toLowerCase().substring(0, 200) : "";
+          
+      // Add content hash for better duplicate detection
+      postData.contentHash = simpleHash((cleanTitle || "") + cleanDesc);
+    }
+    
     const storedData = {
       sentAt: currentTime,
       data: postData || { sentAt: currentTime }
@@ -856,6 +913,11 @@ async function markPostAsSent(postIdentifier, env, postData = null) {
 // Telegram posting function
 async function sendTelegramPost(post, env) {
   try {
+    // For debugging duplicates - log unique identifiers
+    const postId = generatePostIdentifier(post);
+    const contentHash = post.title ? simpleHash((post.title || "") + (post.description ? post.description.substring(0, 200) : "")) : "";
+    console.log(`Preparing to send post: "${post.title}" (ID: ${postId}, Hash: ${contentHash})`);
+    
     // Clean special sources content
     if (post.source === "DW Persian") {
       post.description = post.description
@@ -1788,6 +1850,31 @@ async function fetchLatestPosts(feedUrl, limit = 5) {
         }
       }
       
+      // ⚡️ NEW: Skip Euronews video content
+      if (source === "Euronews Persian" && link && (
+        link.includes("/video/") || 
+        link.includes("mglh-khbri") ||  // "مجله خبری"
+        link.includes("srkhth-khbrha") ||  // "سرخط خبرها"
+        link.includes("-shamgahi") ||  // "شامگاهی"
+        link.includes("-nimrozi") ||  // "نیمروزی"
+        link.includes("/watch/")
+      )) {
+        console.log(`پست ویدیویی یورونیوز نادیده گرفته شد: ${title}`);
+        return null;
+      }
+      
+      // ⚡️ NEW: Skip Euronews promotional content by title
+      if (source === "Euronews Persian" && title && (
+        title.includes("زیرذره بین") ||
+        title.includes("ایران از نگاه رسانه") ||
+        title.includes("مجله شامگاهی") ||
+        title.includes("مجله خبری") ||
+        title.includes("سرخط خبرها")
+      )) {
+        console.log(`پست تبلیغاتی یورونیوز نادیده گرفته شد: ${title}`);
+        return null;
+      }
+      
       // Extract date
       const pubDate = extractPubDate(itemContent, isAtom);
       
@@ -1889,6 +1976,11 @@ async function fetchLatestPosts(feedUrl, limit = 5) {
       const itemContent = match[1];
       const parsedItem = parseItemContent(itemContent, isAtom, feedUrl.source);
       
+      // Skip if the item was filtered out (returned null)
+      if (parsedItem === null) {
+        continue;
+      }
+      
       // Validate parsed item
       if (!parsedItem.title || parsedItem.title.trim().length === 0) {
         continue;
@@ -1909,11 +2001,11 @@ async function fetchLatestPosts(feedUrl, limit = 5) {
         const contentPromise = fetchFullContent(parsedItem.link, feedUrl.source)
           .then(fullContent => {
             if (fullContent.content && fullContent.content.length > parsedItem.description.length * 1.2) {
-              parsedItem.description = fullContent.content;
-            }
-            
-            if (fullContent.image && (!parsedItem.image || fullContent.image.includes("original") || fullContent.image.includes("large"))) {
-              parsedItem.image = fullContent.image;
+            parsedItem.description = fullContent.content;
+        }
+        
+        if (fullContent.image && (!parsedItem.image || fullContent.image.includes("original") || fullContent.image.includes("large"))) {
+          parsedItem.image = fullContent.image;
             }
             
             return parsedItem;
@@ -1974,6 +2066,8 @@ async function processFeeds(env) {
     let lowQualityCount = 0;
     const processedIdentifiers = new Set();
     const processedTitles = new Set();
+    const processedUrls = new Set(); // Add tracking for processed URLs
+    const processedContentHashes = new Set(); // Add tracking for content hashes
     
     // Categorize feeds by priority
     const highPriorityFeeds = RSS_FEEDS.filter(feed => feed.priority === "high"); // Political news
@@ -2088,8 +2182,14 @@ async function processFeeds(env) {
       
       // Process each post
       for (const post of postsToProcess) {
-        // Check for duplicates in this run
-        if (processedIdentifiers.has(post.uniqueIdentifier) || processedTitles.has(post.normalizedTitle)) {
+        // Create a content hash for better duplicate detection
+        const contentHash = simpleHash((post.title || "") + (post.description ? post.description.substring(0, 200) : ""));
+        
+        // Enhanced duplicate check - check title, identifier, link and content hash
+        if (processedIdentifiers.has(post.uniqueIdentifier) || 
+            processedTitles.has(post.normalizedTitle) ||
+            (post.link && processedUrls.has(post.link)) ||
+            processedContentHashes.has(contentHash)) {
           console.log(`پست "${post.title}" قبلاً در همین اجرا پردازش شده است، نادیده گرفتن...`);
           duplicateCount++;
           continue;
@@ -2172,8 +2272,12 @@ async function processFeeds(env) {
                 });
               }
               
+              // Add to processed tracking collections
               processedIdentifiers.add(post.uniqueIdentifier);
               processedTitles.add(post.normalizedTitle);
+              if (post.link) processedUrls.add(post.link);
+              processedContentHashes.add(contentHash);
+              
               successCount++;
               await delay(sendDelay);
               return true;
@@ -2269,6 +2373,57 @@ function evaluateContentQuality(post) {
     // Basic validation
     if (!post.title || !post.description || post.title.trim().length === 0 || post.description.trim().length === 0) {
       return { isHighQuality: false, reason: "محتوا یا عنوان ناکافی" };
+    }
+
+    // NEW: Filter out Euronews promotional content about other programs
+    if (post.source === "Euronews Persian") {
+      // Check for promotional content in title or first part of description
+      const fullText = post.title + " " + post.description.substring(0, 300);
+      
+      const promotionalPhrases = [
+        "ایران زیرذره بین رسانه های خارجی",
+        "زیرذره بین رسانه های خارجی",
+        "می توانید نسخه مفصل تر آن را بخوانید",
+        "مجله شامگاهی",
+        "سرخط خبرها",
+        "ویدیوی کامل این برنامه",
+        "یورونیوز فارسی تقدیم می کند",
+        "پخش زنده یورونیوز",
+        "می‌توانید در وبسایت ما بخوانید",
+        "می‌توانید در صفحه اینستاگرام ما",
+        "یورونیوز فارسی را دنبال کنید"
+      ];
+      
+      for (const phrase of promotionalPhrases) {
+        if (fullText.includes(phrase)) {
+          return {
+            isHighQuality: false,
+            reason: `پست تبلیغاتی یورونیوز (${phrase}) که به برنامه‌های دیگر ارجاع می‌دهد`
+          };
+        }
+      }
+      
+      // Check for common patterns in Euronews promotional content
+      if (
+        fullText.includes("بخوانید") && 
+        (fullText.includes("نسخه") || fullText.includes("کامل") || fullText.includes("مفصل"))
+      ) {
+        return {
+          isHighQuality: false,
+          reason: "پست ارجاعی یورونیوز به محتوای کامل در جای دیگر"
+        };
+      }
+      
+      // Check for video promotion patterns
+      if (
+        (fullText.includes("ویدیو") || fullText.includes("ویدئو") || fullText.includes("تصویر")) && 
+        (fullText.includes("ببینید") || fullText.includes("تماشا") || fullText.includes("مشاهده"))
+      ) {
+        return {
+          isHighQuality: false,
+          reason: "پست ارجاعی یورونیوز به ویدیو یا محتوای چندرسانه‌ای"
+        };
+      }
     }
 
     // SPORTS NEWS FILTER - CRITICAL TO KEEP
