@@ -39,6 +39,14 @@ function sanitizeText(text) {
   text = text.replace(/\\(\d)/g, "$1");
   text = text.replace(/\\\//g, "/");
   
+  // ⚡️ NEW: Remove malformed bullet points that appear at the end of articles
+  text = text.replace(/\s*[•]\s*[\u0600-\u06FF\s]+\.\s*[•]\s*[\u0600-\u06FF\s]+\./g, "");
+  text = text.replace(/\s*[•]\s*[\u0600-\u06FF\s]+\./g, "");
+  
+  // ⚡️ NEW: Remove bullet points with topic names that may appear
+  const topicBulletPattern = /\s*[•]\s*(فوتبال|پرسپولیس|استقلال|دادگاه|ورزش|مسابقه|هنر|سینما|موسیقی|بازار|بورس)\s*\./g;
+  text = text.replace(topicBulletPattern, "");
+  
   // ⚡️ جدید: حذف پیشوندهای شهر-خبرگزاری از ابتدای خبرها
   // مثال: "بجنورد-ایرنا-" یا "تهران - ایسنا -"
   text = text.replace(/^[\u0600-\u06FF\s]+[-–]\s*[\u0600-\u06FF]+\s*[-–]\s*/g, "");
@@ -951,6 +959,30 @@ async function sendTelegramPost(post, env) {
     if (!cleanDescription || cleanDescription.trim().length < 50) {
       console.log(`محتوای پست "${cleanTitle}" بسیار کوتاه است، پست ارسال نمی‌شود`);
       return false;
+    }
+    
+    // ⚡️ NEW: Additional validation for content with malformed bullet points or sports/entertainment content
+    const bulletPointPattern = /[•]\s*[\u0600-\u06FF\s]+\./;
+    if (bulletPointPattern.test(cleanDescription)) {
+      console.log(`پست "${cleanTitle}" دارای نقاط بولت مشکل‌دار است که باید حذف شوند`);
+      // Remove the bullet points one more time
+      cleanDescription = cleanDescription.replace(/\s*[•]\s*[\u0600-\u06FF\s]+\.\s*[•]\s*[\u0600-\u06FF\s]+\./g, "");
+      cleanDescription = cleanDescription.replace(/\s*[•]\s*[\u0600-\u06FF\s]+\./g, "");
+      
+      // If content is too short after removing bullets, reject it
+      if (cleanDescription.trim().length < 50) {
+        console.log(`پس از حذف نقاط بولت، محتوای پست "${cleanTitle}" بسیار کوتاه شد و ارسال نمی‌شود`);
+        return false;
+      }
+    }
+    
+    // ⚡️ NEW: Check for sports terms one more time
+    const sportsTerms = ["فوتبال", "پرسپولیس", "استقلال", "لیگ", "تیم", "باشگاه", "بازیکن", "مسابقه"];
+    for (const term of sportsTerms) {
+      if (cleanTitle.includes(term) || cleanDescription.substring(0, 100).includes(term)) {
+        console.log(`پست "${cleanTitle}" حاوی محتوای ورزشی است و ارسال نمی‌شود`);
+        return false;
+      }
     }
     
     // IMPROVED TITLE REPETITION FIX: More aggressive search for title in content
@@ -2426,13 +2458,46 @@ function evaluateContentQuality(post) {
       }
     }
 
-    // SPORTS NEWS FILTER - CRITICAL TO KEEP
+    // ⚡️ ENHANCED SPORTS NEWS FILTER - Check both title AND content
     const sportsKeywords = [
-      "فوتبال", "فوتسال", "والیبال", "بسکتبال", "کشتی", "تکواندو", "جودو", 
-      "تیم ملی", "مسابقه", "لیگ", "جام", "قهرمانی", "مدال", "ورزش", "گل", 
-      "شکست خورد", "پیروز شد", "تساوی", "فینال", "استقلال", "پرسپولیس"
+      // Teams
+      "پرسپولیس", "استقلال", "سپاهان", "تراکتور", "فولاد", "ذوب آهن", "سایپا", "پیکان", "نساجی", "نفت", 
+      "گل گهر", "شهر خودرو", "آلومینیوم", "مس", "هوادار", "ملوان", "بارسلونا", "رئال مادرید", "منچستر",
+      "لیورپول", "چلسی", "یونایتد", "سیتی", "آرسنال", "یوونتوس", "اینتر", "میلان", "بایرن", "دورتموند",
+      "پاری سن ژرمن", "پی اس جی", "اتلتیکو", "آژاکس", "پورتو",
+      
+      // Sports terms
+      "فوتبال", "فوتسال", "والیبال", "بسکتبال", "کشتی", "تکواندو", "جودو", "هندبال", "شنا", "ژیمناستیک",
+      "دوچرخه‌سواری", "تنیس", "گلف", "بوکس", "کاراته", "اسکی", "تیراندازی", "وزنه‌برداری", "دو و میدانی",
+      
+      // Sports-related terms
+      "تیم ملی", "مسابقه", "لیگ", "جام", "قهرمانی", "مدال", "ورزش", "گل", "پنالتی", "کرنر", "اوت", 
+      "شکست خورد", "پیروز شد", "تساوی", "فینال", "نیمه نهایی", "مرحله گروهی", "امتیاز", "رده‌بندی",
+      "میزبان", "فدراسیون", "جام جهانی", "المپیک", "آسیایی", "سرمربی", "مربی", "کاپیتان", "بازیکن",
+      "هافبک", "مهاجم", "مدافع", "دروازه‌بان", "داور", "کارت زرد", "کارت قرمز", "اخراج", "تعویض",
+      
+      // Additional team-related terms
+      "باشگاه", "تیم", "فوتبالیست", "قرارداد امضا", "نقل و انتقالات", "فصل", "دور رفت", "دور برگشت",
+      "خرید بازیکن", "جذب بازیکن", "جام حذفی", "سوپرجام", "سوپر لیگ"
     ];
     
+    // Combined text for checking
+    const combinedText = (post.title + " " + post.description.substring(0, 300)).toLowerCase();
+    
+    // First check for exact team names in title - these are the strongest indicators
+    const teamNames = ["پرسپولیس", "استقلال", "سپاهان", "تراکتور", "بارسلونا", "رئال مادرید", "منچستر", "لیورپول"];
+    for (const team of teamNames) {
+      // This uses word boundary to match exact team names
+      const teamRegex = new RegExp(`\\b${team}\\b`, 'i');
+      if (teamRegex.test(post.title)) {
+        return {
+          isHighQuality: false,
+          reason: `محتوای ورزشی (تیم ${team}) با کانال اخبار سیاسی، اقتصادی و رمزارزی همخوانی ندارد`
+        };
+      }
+    }
+    
+    // Then check for sports keywords in title - higher priority check
     for (const keyword of sportsKeywords) {
       const keywordRegex = new RegExp(`\\b${keyword}\\b`, 'i');
       if (keywordRegex.test(post.title)) {
@@ -2443,12 +2508,30 @@ function evaluateContentQuality(post) {
       }
     }
     
+    // Check for multiple sports terms in content - check for concentration of sports terms
+    let sportsTermCount = 0;
+    for (const keyword of sportsKeywords) {
+      const keywordRegex = new RegExp(`\\b${keyword}\\b`, 'i');
+      if (keywordRegex.test(combinedText)) {
+        sportsTermCount++;
+        if (sportsTermCount >= 3) {  // If we find 3 or more sports terms, it's likely a sports article
+          return {
+            isHighQuality: false,
+            reason: `محتوای ورزشی با تمرکز بالا (${sportsTermCount} اصطلاح ورزشی) با کانال اخبار سیاسی، اقتصادی و رمزارزی همخوانی ندارد`
+          };
+        }
+      }
+    }
+    
     // ENTERTAINMENT NEWS FILTER - Also reject celebrity news and entertainment
     const entertainmentKeywords = [
       "سینما", "بازیگر", "فیلم", "سریال", "موسیقی", "خواننده", "هنرمند", 
-      "کنسرت", "اینستاگرام", "کلیپ", "مد", "لباس", "آرایش", "جشنواره"
+      "کنسرت", "اینستاگرام", "کلیپ", "مد", "لباس", "آرایش", "جشنواره",
+      "بازی", "گیم", "سلبریتی", "ستاره", "مجری", "زیبایی", "مدل", "شو",
+      "تلویزیون", "برنامه تلویزیونی", "فستیوال", "عکاسی", "چهره", "مشهور"
     ];
     
+    // Check entertainment terms in title first
     for (const keyword of entertainmentKeywords) {
       const keywordRegex = new RegExp(`\\b${keyword}\\b`, 'i');
       if (keywordRegex.test(post.title)) {
@@ -2456,6 +2539,21 @@ function evaluateContentQuality(post) {
           isHighQuality: false,
           reason: `موضوع سرگرمی (${keyword}) با کانال اخبار سیاسی، اقتصادی و رمزارزی همخوانی ندارد`
         };
+      }
+    }
+    
+    // Check for multiple entertainment terms in content
+    let entertainmentTermCount = 0;
+    for (const keyword of entertainmentKeywords) {
+      const keywordRegex = new RegExp(`\\b${keyword}\\b`, 'i');
+      if (keywordRegex.test(combinedText)) {
+        entertainmentTermCount++;
+        if (entertainmentTermCount >= 3) {
+          return {
+            isHighQuality: false,
+            reason: `محتوای سرگرمی با تمرکز بالا (${entertainmentTermCount} اصطلاح سرگرمی) با کانال اخبار سیاسی، اقتصادی و رمزارزی همخوانی ندارد`
+          };
+        }
       }
     }
 
