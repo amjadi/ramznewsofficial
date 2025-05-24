@@ -2,25 +2,31 @@
 const TELEGRAM_BOT_TOKEN = "7901847454:AAHiID4x5SDdZCNbwgYd3vVLmRnKVl10J78";
 const CHANNEL_USERNAME = "@ramznewsofficial";
 const MAX_SAVED_MESSAGES = 1000;
-const DELAY_BETWEEN_POSTS = 5000;
+const DELAY_BETWEEN_POSTS = 10000; // Increased from 5000 to 10000 (10 seconds)
 const STORAGE_TTL_DAYS = 60;
+// Add global post tracking to prevent duplicates within the same run
+const GLOBAL_POST_TRACKING = {
+  processedTitles: new Set(),
+  processedHashes: new Set(),
+  processedUrls: new Set(),
+};
 const RSS_FEEDS = [
   // فیدهای خبری عمومی با اولویت سیاست (اولویت اول)
   { url: "https://feeds.bbci.co.uk/persian/rss.xml", source: "BBC Persian", category: "general", priority: "high" },
   { url: "https://rss.dw.com/xml/rss-per-all_volltext", source: "DW Persian", category: "general", priority: "high" },
   { url: "https://parsi.euronews.com/rss", source: "Euronews Persian", category: "general", priority: "high" },
   
-  // فیدهای تخصصی اقتصادی (اولویت دوم)
-  { url: "https://tejaratnews.com/feed/", source: "Tejarat News", category: "finance", priority: "medium" },
+  // فیدهای تخصصی رمزارزی و اقتصادی (اولویت دوم)
+  { url: "https://ramzarz.news/feed/", source: "Ramzarz News", category: "crypto", priority: "high" },
+  { url: "https://arzdigital.com/breaking/feed/", source: "Arz Digital Breaking", category: "crypto", priority: "high" },
+  { url: "https://nobitex.ir/mag/feed/", source: "Nobitex Mag", category: "crypto", priority: "high" },
+  { url: "https://crypto.asriran.com/feed/", source: "Crypto Asriran", category: "crypto", priority: "high" },
+  { url: "https://zoomarz.com/feed", source: "Zoomarz", category: "crypto", priority: "high" },
+  { url: "https://coiniran.com/feed/", source: "Coin Iran", category: "crypto", priority: "high" },
+  { url: "https://blockchainiran.com/feed/", source: "Blockchain Iran", category: "crypto", priority: "high" },
   
-  // فیدهای تخصصی کریپتویی (اولویت سوم)
-  { url: "https://crypto.asriran.com/feed/", source: "Crypto Asriran", category: "crypto", priority: "low" },
-  { url: "https://ramzarz.news/feed/", source: "Ramzarz News", category: "crypto", priority: "low" },
-  { url: "https://arzdigital.com/breaking/feed/", source: "Arz Digital Breaking", category: "crypto", priority: "low" },
-  { url: "https://nobitex.ir/mag/feed/", source: "Nobitex Mag", category: "crypto", priority: "low" },
-  { url: "https://zoomarz.com/feed", source: "Zoomarz", category: "crypto", priority: "low" },
-  { url: "https://coiniran.com/feed/", source: "Coin Iran", category: "crypto", priority: "low" },
-  { url: "https://blockchainiran.com/feed/", source: "Blockchain Iran", category: "crypto", priority: "low" }
+  // فیدهای اقتصادی (اولویت سوم)
+  { url: "https://tejaratnews.com/feed/", source: "Tejarat News", category: "finance", priority: "medium" }
 ];
 
 // Utility functions
@@ -630,6 +636,17 @@ async function hasPostBeenSent(postIdentifier, env) {
       .replace(/[^a-zA-Z0-9\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF_-]/g, "")
       .substring(0, 128);
     
+    // First check if this is a title or hash identifier
+    if (postIdentifier.startsWith('title_') || postIdentifier.startsWith('exact_')) {
+      const value = await env.POST_TRACKER.get(safeIdentifier);
+      if (value) {
+        console.log(`پست با شناسه محتوایی "${safeIdentifier}" قبلاً ارسال شده است`);
+        return true;
+      }
+      return false;
+    }
+    
+    // Check for actual post identifier
     const storedValue = await env.POST_TRACKER.get(safeIdentifier);
     let hasBeenSent = false;
     
@@ -905,6 +922,21 @@ async function markPostAsSent(postIdentifier, env, postData = null) {
       await env.POST_TRACKER.put(exactFingerprint, "1", {
         expirationTtl: 86400 * 30 // 30 روز نگهداری می‌شود
       });
+      
+      // Add normalized title as a separate key
+      if (cleanTitle && cleanTitle.length > 5) {
+        const titleKey = `title_${simpleHash(cleanTitle)}`;
+        await env.POST_TRACKER.put(titleKey, "1", {
+          expirationTtl: 86400 * 30 // 30 روز نگهداری می‌شود
+        });
+      }
+      
+      // Add to global tracking
+      GLOBAL_POST_TRACKING.processedHashes.add(postData.contentHash);
+      GLOBAL_POST_TRACKING.processedTitles.add(cleanTitle);
+      if (postData.link) {
+        GLOBAL_POST_TRACKING.processedUrls.add(postData.link);
+      }
     }
     
     const storedData = {
@@ -941,7 +973,7 @@ async function markPostAsSent(postIdentifier, env, postData = null) {
   }
 }
 
-// Telegram posting function
+// بهبود تابع ارسال پست به تلگرام برای فرمت بندی بهتر
 async function sendTelegramPost(post, env) {
   try {
     // For debugging duplicates - log unique identifiers
@@ -993,29 +1025,9 @@ async function sendTelegramPost(post, env) {
     
     cleanDescription = validatedContent; // استفاده از محتوای تایید شده
     
-    // ⚡️ NEW: Additional validation for content with malformed bullet points or sports/entertainment content
-    const bulletPointPattern = /[•]\s*[\u0600-\u06FF\s]+\./;
-    if (bulletPointPattern.test(cleanDescription)) {
-      console.log(`پست "${cleanTitle}" دارای نقاط بولت مشکل‌دار است که باید حذف شوند`);
-      // Remove the bullet points one more time
-      cleanDescription = cleanDescription.replace(/\s*[•]\s*[\u0600-\u06FF\s]+\.\s*[•]\s*[\u0600-\u06FF\s]+\./g, "");
-      cleanDescription = cleanDescription.replace(/\s*[•]\s*[\u0600-\u06FF\s]+\./g, "");
-      
-      // If content is too short after removing bullets, reject it
-      if (cleanDescription.trim().length < 50) {
-        console.log(`پس از حذف نقاط بولت، محتوای پست "${cleanTitle}" بسیار کوتاه شد و ارسال نمی‌شود`);
-        return false;
-      }
-    }
-    
-    // ⚡️ NEW: Check for sports terms one more time
-    const sportsTerms = ["فوتبال", "پرسپولیس", "استقلال", "لیگ", "تیم", "باشگاه", "بازیکن", "مسابقه"];
-    for (const term of sportsTerms) {
-      if (cleanTitle.includes(term) || cleanDescription.substring(0, 100).includes(term)) {
-        console.log(`پست "${cleanTitle}" حاوی محتوای ورزشی است و ارسال نمی‌شود`);
-        return false;
-      }
-    }
+    // حذف رشته‌های اعداد نامفهوم
+    cleanDescription = cleanDescription.replace(/(?:[\u06F0-\u06F9\d]\s*)+(?=[^\u06F0-\u06F9\d]|$)/g, "");
+    cleanDescription = cleanDescription.replace(/(?:\n|\s)[\u06F0-\u06F9\d]+(?:\s[\u06F0-\u06F9\d]+)+\s/g, " ");
     
     // IMPROVED TITLE REPETITION FIX: More aggressive search for title in content
     if (cleanTitle && cleanDescription) {
@@ -1075,287 +1087,92 @@ async function sendTelegramPost(post, env) {
       cleanDescription = cleanDescription.replace(/\n{3,}/g, "\n\n").trim();
     }
     
-    // Detect breaking news and important content
-    const isBreakingNews = post.isBreakingNews || false;
-    const isHighPriorityContent = post.isHighPriorityContent || false;
-    
-    // Split text into paragraphs for better analysis
-    const paragraphs = cleanDescription.split(/\n\n+/).filter(p => p.trim().length > 0);
-    
-    // Use the findNewsSummary function to get the best paragraph
-    let bestSummaryParagraph = "";
-    if (paragraphs.length > 0 && cleanTitle) {
-      bestSummaryParagraph = findNewsSummary(paragraphs, cleanTitle);
+    // حذف کدهای اعداد درهم در موضوعات بورس و دلار
+    if (/بورس|دلار|سهام|طلا|ارز|قیمت|معاملات/.test(cleanTitle)) {
+      // حذف رشته‌های اعدادی که در سطر مجزا قرار دارند
+      cleanDescription = cleanDescription.replace(/(?:\n|\s)(?:[\u06F0-\u06F9\d]+\s?)+(?:\n|$)/g, "\n");
+      // حذف رشته‌های اعدادی طولانی
+      cleanDescription = cleanDescription.replace(/(?:[\u06F0-\u06F9\d]+\s){5,}/g, "");
     }
     
-    // For breaking news, prioritize the best summary paragraph
-    let mainContent = "";
-    if (isBreakingNews || isHighPriorityContent) {
-      if (bestSummaryParagraph) {
-        mainContent = bestSummaryParagraph;
-        
-        // For important news, add one more relevant paragraph
-        if (paragraphs.length > 1 && bestSummaryParagraph.length < 500) {
-          // Add another important paragraph that's not the same as our best summary
-          for (let i = 0; i < paragraphs.length; i++) {
-            const para = paragraphs[i];
-            if (para !== bestSummaryParagraph && para.length > 50 && 
-                mainContent.length + para.length < 1000) {
-              mainContent += "\n\n" + para;
-              break;
-            }
-          }
-        }
-      } else {
-        // Fallback to first paragraph
-        mainContent = paragraphs[0] || cleanDescription;
-      }
+    // ساخت پست تلگرام با فرمت‌بندی بهتر
+    // ساخت آیکون مناسب براساس دسته‌بندی محتوا
+    let categoryEmoji = "📌";
+    if (post.category === "crypto") {
+      categoryEmoji = "💰";
+    } else if (post.category === "general" || (post.source && post.source.includes("Persian"))) {
+      categoryEmoji = "🔴";
+    } else if (post.category === "finance") {
+      categoryEmoji = "📊";
+    }
+    
+    if (post.isBreakingNews) {
+      categoryEmoji = "⚡️";
+    }
+    
+    // Create post hashtags
+    let hashtags = "";
+    if (post.hashtags && post.hashtags.length > 0) {
+      hashtags = post.hashtags.map(tag => `#${tag}`).join(" ");
     } else {
-      // For regular news: intelligently select most relevant paragraphs
-      // Start with the best summary paragraph if available
-      let selectedParagraphs = [];
-      
-      if (bestSummaryParagraph) {
-        selectedParagraphs.push(bestSummaryParagraph);
-      }
-      
-      // Then add other important paragraphs (up to 3 total)
-      for (let i = 0; i < paragraphs.length && selectedParagraphs.length < 3; i++) {
-        const para = paragraphs[i];
-        // Don't add the summary paragraph twice
-        if (para !== bestSummaryParagraph && para.length > 50) {
-          selectedParagraphs.push(para);
-          // Limit to 2 additional paragraphs after the summary
-          if (selectedParagraphs.length >= 3) {
-            break;
-          }
-        }
-      }
-      
-      // If we somehow got no paragraphs, use the first one
-      if (selectedParagraphs.length === 0 && paragraphs.length > 0) {
-        selectedParagraphs.push(paragraphs[0]);
-      }
-      
-      mainContent = selectedParagraphs.join("\n\n");
-    }
-    
-    // Make sure content doesn't end with incomplete sentence
-    if (mainContent) {
-      // If content doesn't end with proper punctuation, find the last complete sentence
-      if (!/[.!?؟،؛]$/.test(mainContent)) {
-        const lastSentenceEnd = Math.max(
-          mainContent.lastIndexOf('.'), 
-          mainContent.lastIndexOf('!'),
-          mainContent.lastIndexOf('?'),
-          mainContent.lastIndexOf('؟'),
-          mainContent.lastIndexOf('،')
-        );
-        
-        if (lastSentenceEnd > mainContent.length * 0.7) { // Only trim if we're not losing too much
-          mainContent = mainContent.substring(0, lastSentenceEnd + 1);
-        } else {
-          // Otherwise add a period
-          mainContent += ".";
-        }
+      try {
+        const extractedTags = await extractHashtags(post);
+        hashtags = extractedTags.map(tag => `#${tag}`).join(" ");
+      } catch (e) {
+        console.log("خطا در استخراج هشتگ‌ها:", e.message);
       }
     }
     
-    // Format title with proper emoji
-    let titleText = "";
-    if (cleanTitle && cleanTitle.trim()) {
-      if (isBreakingNews) {
-        titleText = `🔴 <b>${cleanTitle}</b>\n\n`;
-      } else if (isHighPriorityContent) {
-        titleText = `⭐️ <b>${cleanTitle}</b>\n\n`;
+    // تنظیم سبک و فرمت متن برای خوانایی بهتر
+    let messageText = `${categoryEmoji} <b>${cleanTitle}</b>\n\n`;
+    
+    // تبدیل خط‌های محتوا به بولت‌پوینت برای خوانایی بهتر
+    const contentLines = cleanDescription.split('\n').filter(line => line.trim().length > 0);
+    for (const line of contentLines) {
+      if (line.trim().startsWith('•')) {
+        messageText += `${line.trim()}\n`;
       } else {
-        titleText = `📌 <b>${cleanTitle}</b>\n\n`;
+        messageText += `• ${line.trim()}\n`;
       }
     }
     
-    // Add channel link
-    const channelLink = `\n\n@ramznewsofficial | اخبار رمزی`;
-    
-    // Generate hashtags - limited and relevant only
-    let hashtags = extractHashtags(post);
-    
-    // For breaking news, add #فوری if not already there
-    if (isBreakingNews && !hashtags.includes("#فوری")) {
-      if (hashtags.length > 0) {
-        hashtags = "#فوری " + hashtags;
-      } else {
-        hashtags = "#فوری";
-      }
+    // افزودن منبع اگر موجود باشد
+    if (post.source) {
+      messageText += `\n<i>منبع: ${post.source}</i>\n`;
     }
     
-    // Set appropriate max length based on content type
-    const hasImage = post.image && isValidUrl(post.image);
-    let maxLength = 3800; // Default limit
-    
-    if (hasImage) {
-      maxLength = isBreakingNews ? 1800 : 2000; // Less for posts with images
-    } else if (isBreakingNews) {
-      maxLength = 2500; // Less for breaking news (better display)
+    // افزودن هشتگ‌ها
+    if (hashtags && hashtags.length > 0) {
+      messageText += `\n${hashtags}\n`;
     }
     
-    // Calculate available space for content
-    const otherPartsLength = titleText.length + hashtags.length + channelLink.length;
-    const maxContentLength = maxLength - otherPartsLength;
+    // افزودن امضای کانال
+    messageText += `\n${CHANNEL_USERNAME} | اخبار رمزی`;
     
-    // IMPROVED CONTENT SHORTENING: Preserve meaning by trimming at sentence boundaries
-    let finalContent = "";
-    if (mainContent.length <= maxContentLength) {
-      finalContent = mainContent;
-    } else {
-      // Split by sentences more accurately
-      const sentenceRegex = /([^.!?؟،؛]+(?:[.!?؟،؛]|$))/g;
-      const sentences = [];
-      let match;
-      
-      while ((match = sentenceRegex.exec(mainContent)) !== null) {
-        sentences.push(match[1]);
-      }
-      
-      let currentLength = 0;
-      
-      // Add sentences until we reach the limit
-      for (const sentence of sentences) {
-        if (currentLength + sentence.length <= maxContentLength - 3) {
-          finalContent += sentence;
-          currentLength += sentence.length;
-        } else {
-          // If we can fit most of the sentence, trim it intelligently
-          if (sentence.length < 100 && currentLength + sentence.length <= maxContentLength) {
-            finalContent += sentence;
-          } else {
-            // If we have almost no content yet, use part of the first sentence
-            if (finalContent.length < 100 && sentences.indexOf(sentence) === 0) {
-              finalContent = sentence.substring(0, maxContentLength - 3) + "...";
-            } else if (finalContent.length < 100) {
-              // If we still don't have enough, use the first paragraph
-              finalContent = paragraphs[0].substring(0, maxContentLength - 3) + "...";
-            }
-          }
-          break;
-        }
-      }
-    }
+    // Send to Telegram
+    const telegramEndpoint = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+    const payload = {
+      chat_id: CHANNEL_USERNAME,
+      text: messageText,
+      parse_mode: "HTML",
+      disable_web_page_preview: false
+    };
     
-    // Final cleanup of content
-    finalContent = finalContent.trim();
-    
-    // Make sure content ends with proper punctuation
-    if (finalContent && !/[.!?؟،؛]$/.test(finalContent)) {
-      finalContent += ".";
-    }
-    
-    // Final check to ensure no title repetition at the end of content
-    const titleWords = cleanTitle.split(/\s+/).filter(word => word.length > 3);
-    if (titleWords.length >= 3) {
-      const lastParagraph = finalContent.split(/\n\n+/).pop() || "";
-      
-      if (lastParagraph.length < cleanTitle.length * 1.5) {
-        // Count how many title words appear in the last paragraph
-        let matchCount = 0;
-        for (const word of titleWords) {
-          if (lastParagraph.includes(word)) {
-            matchCount++;
-          }
-        }
-        
-        // If most of the title words appear in the last paragraph, remove it
-        if (matchCount >= titleWords.length * 0.7) {
-          const parts = finalContent.split(/\n\n+/);
-          if (parts.length > 1) {
-            parts.pop();
-            finalContent = parts.join("\n\n");
-          }
-        }
-      }
-    }
-    
-    // خلاصه‌سازی و فرمت‌بندی هوشمند برای همه پست‌های سیاسی، اقتصادی و رمزارزی
-    const formattedContent = smartFormatAndFilter(finalContent);
-    if (!formattedContent) {
-      console.log(`محتوا قابل خلاصه‌سازی و فرمت‌بندی نبود، ارسال نمی‌شود: ${cleanTitle}`);
-      return false;
-    }
-    finalContent = formattedContent;
-    
-    // Construct final message
-    const message = `${titleText}${finalContent}${hashtags}${channelLink}`;
-    
-    // Configure API URL and payload based on image presence
-    const url = hasImage 
-      ? `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`
-      : `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-    
-    const payload = hasImage 
-      ? {
-          chat_id: CHANNEL_USERNAME,
-          photo: post.image,
-          caption: message,
-          parse_mode: "HTML"
-        } 
-      : {
-          chat_id: CHANNEL_USERNAME,
-          text: message,
-          parse_mode: "HTML"
-        };
-    
-    console.log(`ارسال پست به تلگرام: ${cleanTitle}`);
-    
-    // Send request to Telegram API
-    const response = await fetch(url, {
+    const response = await fetch(telegramEndpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json"
+      },
       body: JSON.stringify(payload)
     });
     
-    // Handle errors
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`Telegram API error: ${response.statusText}, Response: ${errorText}`);
-      
-      if (errorText.includes("message is too long") || errorText.includes("caption is too long")) {
-        // If still too long, try sending only the title and best summary paragraph
-        const shorterContent = bestSummaryParagraph || (paragraphs.length > 0 ? paragraphs[0] : "");
-        const shorterMessage = `${titleText}${shorterContent}${channelLink}`;
-        
-        const shorterPayload = hasImage 
-          ? {
-              chat_id: CHANNEL_USERNAME,
-              photo: post.image,
-              caption: shorterMessage,
-              parse_mode: "HTML"
-            } 
-          : {
-              chat_id: CHANNEL_USERNAME,
-              text: shorterMessage,
-              parse_mode: "HTML"
-            };
-        
-        console.log("Retrying with shorter message containing just the best summary paragraph");
-        
-        const retryResponse = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(shorterPayload)
-        });
-        
-        if (!retryResponse.ok) {
-          console.error(`Final telegram API error after retry: ${await retryResponse.text()}`);
-          return false;
-        }
-        
-        console.log("Successfully sent shortened message");
-        return true;
-      }
-      
+      const errorData = await response.json();
+      console.error(`Telegram API error: ${JSON.stringify(errorData)}`);
       return false;
     }
     
-    console.log("Successfully sent message to Telegram");
+    console.log(`Post sent successfully: "${cleanTitle}"`);
     return true;
   } catch (error) {
     console.error(`Error sending post to Telegram: ${error.message}`);
@@ -1828,35 +1645,44 @@ async function fetchLatestPosts(feedUrl, limit = 5) {
     
     // Function to detect content type 
     const detectContentType = (title, content, source) => {
-      // Breaking news detection - expanded patterns
-      const breakingNewsPatterns = [
-        /فوری/i, /اخبار فوری/i, /خبر فوری/i, /لحظاتی پیش/i, /همین الان/i, /عاجل/i, 
-        /خبر مهم/i, /هم‌اکنون/i, /خبر لحظه‌ای/i, /آخرین خبر/i, /اطلاعیه مهم/i,
-        /هشدار/i, /اعلان/i, /بیانیه مهم/i
-      ];
-      
-      const isBreakingNews = breakingNewsPatterns.some(pattern => 
-        pattern.test(title)
-      );
-      
-      // Enhanced High priority content detection with more specific patterns
-      const highPriorityPatterns = {
+      // Define patterns for breaking news and high priority content
+      const breakingNewsPatterns = {
         political: [
-          /رئیس ?جمهور/i, /وزیر خارجه/i, /شورای امنیت/i, /سازمان ملل/i, 
-          /جنگ/i, /حمله/i, /تحریم/i, /هسته‌ای/i, /برجام/i, /مذاکرات/i, 
-          /توافق/i, /بیانیه/i, /حمله نظامی/i, /حمله موشکی/i, /انتخابات/i,
-          /رهبر/i, /انقلاب/i, /مقام معظم/i
+          /فوری/i, /خبر فوری/i, /لحظات(ی)? پیش/i, /همین (الان|اکنون|لحظه)/i,
+          /اخبار فوری/i, /هم‌اکنون/i, /اطلاعیه (فوری|مهم)/i, /عاجل/i
         ],
         economic: [
-          /بانک مرکزی/i, /افزایش (شدید|قیمت)/i, /کاهش (شدید|قیمت)/i, 
-          /تورم/i, /رکود/i, /بحران اقتصادی/i, /سقوط ارزش/i, 
-          /نرخ ارز/i, /دلار/i, /یورو/i
+          /افزایش ناگهانی (قیمت|نرخ)/i, /سقوط (قیمت|نرخ|شاخص|بازار)/i,
+          /تغییر ناگهانی/i, /تصمیم ناگهانی/i, /جهش (قیمت|نرخ|شاخص|بازار)/i
         ],
         crypto: [
-          /سقوط (بیت ?کوین|رمزارز)/i, /افزایش قیمت بیت ?کوین/i, 
-          /هک (صرافی|رمزارز)/i, /تصویب قانون/i, /رگولاتوری/i
+          /سقوط (بیت‌کوین|اتریوم|رمزارز)/i, /جهش (بیت‌کوین|اتریوم|رمزارز)/i,
+          /هشدار (مهم|فوری) رمزارز/i, /تحلیل فوری (بیت‌کوین|اتریوم|رمزارز)/i
         ]
       };
+      
+      const highPriorityPatterns = {
+        political: [
+          /رهبر/i, /رئیس\s?جمهور/i, /تحریم/i, /برجام/i, /وزیر/i, /آیت\s?الله/i,
+          /دولت/i, /قوه قضائیه/i, /رئیسی/i, /انتخابات/i, /مجلس/i, /نماینده مجلس/i
+        ],
+        economic: [
+          /بانک مرکزی/i, /وزیر اقتصاد/i, /رئیس کل بانک مرکزی/i,
+          /دلار/i, /سکه/i, /طلا/i, /بورس/i, /شاخص/i, /بازار سرمایه/i
+        ],
+        crypto: [
+          /بیت\s?کوین/i, /اتریوم/i, /رمزارز/i, /ارز دیجیتال/i,
+          /بلاک\s?چین/i, /تتر/i, /ارز رمزنگاری/i, /استیبل\s?کوین/i
+        ]
+      };
+      
+      // Check for breaking news first
+      let isBreakingNews = false;
+      Object.values(breakingNewsPatterns).forEach(patterns => {
+        if (!isBreakingNews) {
+          isBreakingNews = patterns.some(pattern => pattern.test(title));
+        }
+      });
       
       // Check for high priority across all categories
       const isHighPriorityContent = 
@@ -1869,27 +1695,42 @@ async function fetchLatestPosts(feedUrl, limit = 5) {
       
       // Political sources are typically BB, DW, Euronews
       if (source && (source.includes("BBC") || source.includes("DW") || source.includes("Euronews"))) {
-        category = "politics";
+        category = "general";
       }
       // Crypto sources
       else if (source && (
         source.includes("Crypto") || source.includes("Ramzarz") || 
-        source.includes("Arz Digital") || source.includes("Coin")
+        source.includes("Arz Digital") || source.includes("Coin") ||
+        source.includes("Nobitex") || source.includes("Zoomarz") ||
+        source.includes("Blockchain")
       )) {
         category = "crypto";
       }
       // Economic sources
       else if (source && (source.includes("Tejarat") || source.includes("Eghtesad") || source.includes("TGJU"))) {
-        category = "economy";
+        category = "finance";
       }
       // Otherwise do content-based detection
       else {
-        if (highPriorityPatterns.political.some(pattern => pattern.test(title + " " + content.substring(0, 200)))) {
-          category = "politics";
-        } else if (highPriorityPatterns.economic.some(pattern => pattern.test(title + " " + content.substring(0, 200)))) {
-          category = "economy";
-        } else if (highPriorityPatterns.crypto.some(pattern => pattern.test(title + " " + content.substring(0, 200)))) {
+        // Check content for crypto-related terms with highest priority
+        const cryptoTerms = [
+          "بیت‌کوین", "بیتکوین", "اتریوم", "رمزارز", "ارز دیجیتال", "بلاکچین", "بلاک چین",
+          "تتر", "کریپتو", "صرافی ارز دیجیتال", "دیفای", "ان اف تی", "متاورس", "وب 3", "وب3"
+        ];
+        
+        const fullText = (title + " " + content.substring(0, 200)).toLowerCase();
+        
+        // First priority: crypto content
+        if (cryptoTerms.some(term => fullText.includes(term))) {
           category = "crypto";
+        }
+        // Second priority: political content
+        else if (highPriorityPatterns.political.some(pattern => pattern.test(fullText))) {
+          category = "general";
+        } 
+        // Third priority: economic content
+        else if (highPriorityPatterns.economic.some(pattern => pattern.test(fullText))) {
+          category = "finance";
         }
       }
       
@@ -2131,24 +1972,25 @@ async function processFeeds(env) {
     console.log("شروع پردازش فیدهای RSS به صورت هوشمند");
     console.log(`پردازش ${RSS_FEEDS.length} فید RSS`);
     
+    // Reset global tracking for this run
+    GLOBAL_POST_TRACKING.processedTitles.clear();
+    GLOBAL_POST_TRACKING.processedHashes.clear();
+    GLOBAL_POST_TRACKING.processedUrls.clear();
+    
     let successCount = 0;
     let failureCount = 0;
     let duplicateCount = 0;
     let filteredCount = 0;
     let lowQualityCount = 0;
-    const processedIdentifiers = new Set();
-    const processedTitles = new Set();
-    const processedUrls = new Set(); // Add tracking for processed URLs
-    const processedContentHashes = new Set(); // Add tracking for content hashes
     
-    // Categorize feeds by priority
-    const highPriorityFeeds = RSS_FEEDS.filter(feed => feed.priority === "high"); // Political news
+    // Categorize feeds by priority - تغییر اولویت‌ها به نفع محتوای رمزارزی و سیاسی
+    const highPriorityFeeds = RSS_FEEDS.filter(feed => feed.priority === "high"); // سیاسی و رمزارزی
     const mediumPriorityFeeds = RSS_FEEDS.filter(feed => feed.priority === "medium"); // Economic news
-    const lowPriorityFeeds = RSS_FEEDS.filter(feed => feed.priority === "low"); // Crypto news
+    const lowPriorityFeeds = RSS_FEEDS.filter(feed => feed.priority === "low"); // Other
     
     console.log(`فیدها بر اساس اولویت: ${highPriorityFeeds.length} فید اولویت بالا، ${mediumPriorityFeeds.length} فید اولویت متوسط، ${lowPriorityFeeds.length} فید اولویت پایین`);
     
-    // Helper function to process feeds
+    // تغییر پارامترهای پردازش برای تعادل بیشتر بین محتوا
     const processFeedsByPriority = async (feeds, priorityName, minQualityScore) => {
       console.log(`شروع پردازش ${feeds.length} فید با اولویت ${priorityName}`);
       
@@ -2157,9 +1999,9 @@ async function processFeeds(env) {
       
       // Fetch posts from all feeds in parallel
       for (const feed of feeds) {
-        const postsPerFeed = priorityName.includes("بالا") ? 15 : // More posts from high priority feeds
-                            priorityName.includes("متوسط") ? 10 : // Medium from economic feeds
-                            7; // Fewer from crypto feeds (lower priority)
+        const postsPerFeed = feed.category === "crypto" ? 10 : // رمزارزی بیشتر
+                            feed.category === "general" ? 8 : // سیاسی متوسط
+                            5; // اقتصادی کمتر
                             
         const fetchPromise = fetchLatestPosts(feed, postsPerFeed)
           .then(posts => {
@@ -2170,12 +2012,22 @@ async function processFeeds(env) {
               const normalizedTitle = post.title.trim().replace(/\s+/g, " ").toLowerCase();
               const qualityEvaluation = evaluateContentQuality(post);
               
+              // Add content hash
+              const cleanTitle = post.title.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
+                .trim().toLowerCase();
+              const cleanDesc = post.description ? 
+                post.description.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
+                  .trim().toLowerCase().substring(0, 200) : "";
+              const contentHash = simpleHash((cleanTitle || "") + cleanDesc);
+              
               return {
                 ...post,
                 feed,
                 uniqueIdentifier,
                 normalizedTitle,
-                qualityEvaluation
+                contentHash,
+                qualityEvaluation,
+                category: feed.category
               };
             }).filter(post => post.qualityEvaluation.isHighQuality);
           })
@@ -2198,11 +2050,34 @@ async function processFeeds(env) {
       
       console.log(`${allPosts.length} پست با کیفیت مناسب از فیدهای اولویت ${priorityName} دریافت شد`);
       
-      // Sort posts by priority with enhanced logic:
-      // 1. Breaking news
-      // 2. High-priority political/international news
-      // 3. Quality score and recency
-      allPosts.sort((a, b) => {
+      // First filter out duplicates based on global tracking
+      const filteredPosts = allPosts.filter(post => {
+        // Check global tracking for duplicates
+        if (GLOBAL_POST_TRACKING.processedHashes.has(post.contentHash)) {
+          console.log(`پست "${post.title}" با هش ${post.contentHash} قبلاً در همین اجرا پردازش شده است`);
+          duplicateCount++;
+          return false;
+        }
+        
+        if (GLOBAL_POST_TRACKING.processedTitles.has(post.normalizedTitle)) {
+          console.log(`پست با عنوان "${post.title}" قبلاً در همین اجرا پردازش شده است`);
+          duplicateCount++;
+          return false;
+        }
+        
+        if (post.link && GLOBAL_POST_TRACKING.processedUrls.has(post.link)) {
+          console.log(`پست با لینک "${post.link}" قبلاً در همین اجرا پردازش شده است`);
+          duplicateCount++;
+          return false;
+        }
+        
+        return true;
+      });
+      
+      console.log(`${filteredPosts.length} پست پس از حذف تکراری‌های داخلی باقی ماند`);
+      
+      // Sort posts with priority for crypto and political content
+      filteredPosts.sort((a, b) => {
         // Breaking news first
         if (a.isBreakingNews && !b.isBreakingNews) return -1;
         if (!a.isBreakingNews && b.isBreakingNews) return 1;
@@ -2210,6 +2085,12 @@ async function processFeeds(env) {
         // High priority content next
         if (a.isHighPriorityContent && !b.isHighPriorityContent) return -1;
         if (!a.isHighPriorityContent && b.isHighPriorityContent) return 1;
+        
+        // Category priority: crypto > politics > economy
+        if (a.category === "crypto" && b.category !== "crypto") return -1;
+        if (a.category !== "crypto" && b.category === "crypto") return 1;
+        if (a.category === "general" && b.category === "finance") return -1;
+        if (a.category === "finance" && b.category === "general") return 1;
         
         // If both are breaking or both are high priority, consider quality score
         if ((a.isBreakingNews && b.isBreakingNews) || (a.isHighPriorityContent && b.isHighPriorityContent)) {
@@ -2229,65 +2110,68 @@ async function processFeeds(env) {
         return b.qualityEvaluation.qualityScore - a.qualityEvaluation.qualityScore;
       });
       
-      // Limit the number of posts we'll process based on priority 
-      // to avoid flooding the channel and focus on quality
-      const maxPostsToProcess = priorityName.includes("بالا") ? 5 : // Send at most 5 political posts
-                               priorityName.includes("متوسط") ? 3 : // Send at most 3 economic posts
-                               2; // Send at most 2 crypto posts
+      // Adjust post limits to prioritize crypto and political content
+      const maxPostsToProcess = priorityName.includes("بالا") ? 8 : // ارسال حداکثر 8 پست از اولویت بالا
+                               priorityName.includes("متوسط") ? 2 : // حداکثر 2 پست از اقتصادی
+                               1; // حداکثر 1 پست از بقیه
       
       // But always process breaking news regardless of limits
-      const breakingNewsPosts = allPosts.filter(post => post.isBreakingNews);
-      const highPriorityPosts = allPosts.filter(post => !post.isBreakingNews && post.isHighPriorityContent);
-      const otherPosts = allPosts.filter(post => !post.isBreakingNews && !post.isHighPriorityContent);
+      const breakingNewsPosts = filteredPosts.filter(post => post.isBreakingNews);
+      const highPriorityPosts = filteredPosts.filter(post => !post.isBreakingNews && post.isHighPriorityContent);
+      const otherPosts = filteredPosts.filter(post => !post.isBreakingNews && !post.isHighPriorityContent);
       
       // اگر اخبار فوری داریم، همه را بدون محدودیت و با delay بسیار کم ارسال کن
       if (breakingNewsPosts.length > 0) {
         for (const post of breakingNewsPosts) {
+          // Check if post exists by normalized title 
+          const titleKey = `title_${simpleHash(post.normalizedTitle)}`;
+          const isDuplicateTitle = await hasPostBeenSent(titleKey, env);
+          
+          // Check if post exists by content hash
+          const contentKey = `exact_${post.contentHash}`;
+          const isDuplicateContent = await hasPostBeenSent(contentKey, env);
+          
+          // Check if post exists by unique identifier
           const isPostSent = await hasPostBeenSent(post.uniqueIdentifier, env);
-          if (!isPostSent) {
+          
+          if (!isPostSent && !isDuplicateTitle && !isDuplicateContent) {
             console.log(`ارسال فوری خبر: ${post.title}`);
+            
+            // Update global tracking
+            GLOBAL_POST_TRACKING.processedHashes.add(post.contentHash);
+            GLOBAL_POST_TRACKING.processedTitles.add(post.normalizedTitle);
+            if (post.link) GLOBAL_POST_TRACKING.processedUrls.add(post.link);
+            
             await sendTelegramPost(post, env);
             await markPostAsSent(post.uniqueIdentifier, env, post);
             await delay(500); // فقط نیم ثانیه تاخیر بین اخبار فوری
+          } else {
+            console.log(`خبر فوری "${post.title}" قبلاً ارسال شده است، نادیده گرفتن...`);
+            duplicateCount++;
           }
         }
       }
-      // سپس اخبار مهم و عادی را طبق روال قبلی و با محدودیت ارسال کن
-      const postsToProcess = [
-        ...highPriorityPosts.slice(0, maxPostsToProcess),
-        ...otherPosts.slice(0, Math.max(1, maxPostsToProcess - highPriorityPosts.length))
-      ];
       
-      console.log(`پردازش ${postsToProcess.length} پست از مجموع ${allPosts.length} پست دریافتی (${breakingNewsPosts.length} خبر فوری، ${highPriorityPosts.length} خبر مهم)`);
+      // جداسازی پست‌ها براساس دسته‌بندی
+      const cryptoPosts = otherPosts.filter(post => post.category === "crypto");
+      const politicalPosts = otherPosts.filter(post => post.category === "general");
+      const economyPosts = otherPosts.filter(post => post.category === "finance");
+      
+      // ترکیب پست‌ها با اولویت به رمزارزها و سیاسی
+      const postsToProcess = [
+        ...highPriorityPosts.slice(0, 3), // حداکثر 3 خبر مهم
+        ...cryptoPosts.slice(0, 3),       // حداکثر 3 خبر رمزارزی
+        ...politicalPosts.slice(0, 3),    // حداکثر 3 خبر سیاسی
+        ...economyPosts.slice(0, 1)       // حداکثر 1 خبر اقتصادی
+      ].slice(0, maxPostsToProcess);      // با رعایت محدودیت کلی
+      
+      console.log(`پردازش ${postsToProcess.length} پست از مجموع ${filteredPosts.length} پست دریافتی (${breakingNewsPosts.length} خبر فوری، ${cryptoPosts.length} خبر رمزارزی، ${politicalPosts.length} خبر سیاسی)`);
       
       // Process posts by priority
       const postPromises = [];
       
       // Process each post
       for (const post of postsToProcess) {
-        // Create a content hash for better duplicate detection
-        const contentHash = simpleHash((post.title || "") + (post.description ? post.description.substring(0, 200) : ""));
-        
-        // Enhanced duplicate check - check title, identifier, link and content hash
-        if (processedIdentifiers.has(post.uniqueIdentifier) || 
-            processedTitles.has(post.normalizedTitle) ||
-            (post.link && processedUrls.has(post.link)) ||
-            processedContentHashes.has(contentHash)) {
-          console.log(`پست "${post.title}" قبلاً در همین اجرا پردازش شده است، نادیده گرفتن...`);
-          duplicateCount++;
-          continue;
-        }
-        
-        // Create additional identifiers for more thorough duplicate check
-        const additionalIdentifiers = [];
-        if (post.title) {
-          const titleIdentifier = post.title.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, "").trim();
-          additionalIdentifiers.push(titleIdentifier);
-        }
-        if (post.link) {
-          additionalIdentifiers.push(post.link);
-        }
-        
         // Skip posts with quality score below threshold (unless breaking news)
         if (!post.isBreakingNews && 
             !post.isHighPriorityContent && 
@@ -2299,32 +2183,28 @@ async function processFeeds(env) {
         
         // Process each post asynchronously but in order
         const postPromise = (async () => {
-          // Check if post has been sent before
-          let isPostSent = await hasPostBeenSent(post.uniqueIdentifier, env);
+          // Check multiple identifiers for duplicates
+          const titleKey = `title_${simpleHash(post.normalizedTitle)}`;
+          const contentKey = `exact_${post.contentHash}`;
           
-          if (!isPostSent) {
-            for (const additionalId of additionalIdentifiers) {
-              if (await hasPostBeenSent(additionalId, env)) {
-                isPostSent = true;
-                console.log(`پست با شناسه اضافی "${additionalId}" قبلاً ارسال شده است.`);
-                duplicateCount++;
-                break;
-              }
-            }
-          }
+          const isDuplicateTitle = await hasPostBeenSent(titleKey, env);
+          const isDuplicateContent = await hasPostBeenSent(contentKey, env);
+          const isPostSent = await hasPostBeenSent(post.uniqueIdentifier, env);
           
-          // Check for similar content
-          if (!isPostSent && !post.isBreakingNews) {
+          let isDuplicate = isPostSent || isDuplicateTitle || isDuplicateContent;
+          
+          // Only perform expensive content similarity check if basic checks passed
+          if (!isDuplicate && !post.isBreakingNews) {
             const contentDuplicate = await isContentDuplicate(post, env);
             if (contentDuplicate) {
               console.log(`پست "${post.title}" دارای محتوای مشابه با پست‌های قبلی است، نادیده گرفتن...`);
-              isPostSent = true;
+              isDuplicate = true;
               duplicateCount++;
             }
           }
           
           // Send post if not a duplicate
-          if (!isPostSent) {
+          if (!isDuplicate) {
             // Shorter delay for breaking news
             const sendDelay = post.isBreakingNews ? 1000 : 
                              post.isHighPriorityContent ? 2000 : 
@@ -2348,7 +2228,7 @@ async function processFeeds(env) {
               
               await markPostAsSent(post.uniqueIdentifier, env, postData);
               
-              for (const additionalId of additionalIdentifiers) {
+              for (const additionalId of [post.uniqueIdentifier, titleKey, contentKey]) {
                 await markPostAsSent(additionalId, env, {
                   referenceId: post.uniqueIdentifier,
                   sentAt: new Date().toISOString()
@@ -2356,10 +2236,9 @@ async function processFeeds(env) {
               }
               
               // Add to processed tracking collections
-              processedIdentifiers.add(post.uniqueIdentifier);
-              processedTitles.add(post.normalizedTitle);
-              if (post.link) processedUrls.add(post.link);
-              processedContentHashes.add(contentHash);
+              GLOBAL_POST_TRACKING.processedHashes.add(post.contentHash);
+              GLOBAL_POST_TRACKING.processedTitles.add(post.normalizedTitle);
+              if (post.link) GLOBAL_POST_TRACKING.processedUrls.add(post.link);
               
               successCount++;
               await delay(sendDelay);
@@ -2967,45 +2846,32 @@ function validateContentCompleteness(content) {
   return content; // محتوا کامل است
 }
 
-// تابع خلاصه‌سازی و فرمت‌بندی هوشمند برای تلگرام
+// تابع خلاصه‌سازی و فرمت‌بندی هوشمند برای تلگرام - بهبود یافته
 function smartFormatAndFilter(text) {
   // حذف جملات تبلیغاتی و زائد
   text = text.replace(/گزارش‌های بیشتر.*|برای مشاهده.*|در صفحه.*بخوانید.*/g, '');
 
-  // استخراج خطوط قیمت و آمار
-  const priceLines = [];
-  const lines = text.split('\n');
-  for (let line of lines) {
-    if (/دلار|یورو|تتر|پوند|درهم|بورس|سهام|طلا|سکه|قیمت|تومان|ریال/.test(line) && /[۰-۹0-9]+/.test(line)) {
-      // فرمت‌بندی با ایموجی مناسب
-      if (/دلار/.test(line)) priceLines.push('📊 دلار: ' + (line.match(/[۰-۹0-9,]+/g) || []).join(' '));
-      else if (/یورو/.test(line)) priceLines.push('💱 یورو: ' + (line.match(/[۰-۹0-9,]+/g) || []).join(' '));
-      else if (/تتر/.test(line)) priceLines.push('🪙 تتر: ' + (line.match(/[۰-۹0-9,]+/g) || []).join(' '));
-      else if (/طلا/.test(line)) priceLines.push('🥇 طلا: ' + (line.match(/[۰-۹0-9,]+/g) || []).join(' '));
-      else if (/سکه/.test(line)) priceLines.push('🪙 سکه: ' + (line.match(/[۰-۹0-9,]+/g) || []).join(' '));
-      else if (/بورس|سهام/.test(line)) priceLines.push('🏛️ بورس: ' + (line.match(/[۰-۹0-9,]+/g) || []).join(' '));
-      else priceLines.push('🔹 ' + line.trim());
-    }
-  }
-
   // استخراج جملات کلیدی
   const sentences = text.split(/[.!؟]\s+/);
-  const keySentences = sentences.filter(s =>
-    /[۰-۹0-9]+/.test(s) || /تغییر|افزایش|کاهش|نتیجه|جمع‌بندی|مهم|جدید|امروز|دیروز|رشد|سقوط|کاهش|افزایش|تحلیل|پیش‌بینی|هشدار/.test(s)
+  let keySentences = sentences.filter(s =>
+    /تغییر|افزایش|کاهش|نتیجه|جمع‌بندی|مهم|جدید|امروز|دیروز|رشد|سقوط|کاهش|افزایش|تحلیل|پیش‌بینی|هشدار/.test(s)
   ).map(s => s.trim()).filter(s => s.length > 10);
 
-  // ترکیب جملات کلیدی و خطوط قیمت
+  // ساختاردهی خروجی - فقط جملات اصلی بدون اعداد نامفهوم
   let result = '';
-  if (priceLines.length > 0) {
-    result += '<code>' + priceLines.join('\n') + '</code>\n\n';
-  }
-  if (keySentences.length > 0) {
+  if (keySentences.length === 1) {
+    result += keySentences[0];
+  } else if (keySentences.length > 1) {
     result += keySentences.slice(0, 5).map(s => '• ' + s).join('\n');
+  } else {
+    // اگر هیچ جمله کلیدی پیدا نشد، از اصل متن استفاده کنیم
+    result = text;
   }
+  
   result = result.trim();
 
   // اگر نتیجه قابل قبول نبود، return null
-  if (result.length < 40 || (priceLines.length === 0 && keySentences.length < 2)) return null;
+  if (result.length < 40) return null;
   return result;
 }
 
@@ -3037,12 +2903,67 @@ export default {
       return new Response(JSON.stringify({
         status: "active",
         feeds: RSS_FEEDS.length,
-        version: "2.0.0",
+        version: "2.0.1", // Updated version
         lastUpdate: new Date().toISOString()
       }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       });
+    }
+    
+    // Add new endpoint to clear duplicate content records
+    if (url.pathname === "/clear-duplicates") {
+      try {
+        if (env && env.POST_TRACKER) {
+          console.log("شروع پاکسازی رکوردهای تشخیص محتوای تکراری...");
+          const keys = await env.POST_TRACKER.list({ prefix: "exact_", limit: 1000 });
+          
+          if (keys && keys.keys && keys.keys.length > 0) {
+            console.log(`تعداد ${keys.keys.length} رکورد تشخیص محتوای تکراری یافت شد.`);
+            
+            let deleteCount = 0;
+            for (const key of keys.keys) {
+              await env.POST_TRACKER.delete(key.name);
+              deleteCount++;
+            }
+            
+            // Also clear title keys
+            const titleKeys = await env.POST_TRACKER.list({ prefix: "title_", limit: 1000 });
+            if (titleKeys && titleKeys.keys && titleKeys.keys.length > 0) {
+              console.log(`تعداد ${titleKeys.keys.length} رکورد عنوان تکراری یافت شد.`);
+              
+              for (const key of titleKeys.keys) {
+                await env.POST_TRACKER.delete(key.name);
+                deleteCount++;
+              }
+            }
+            
+            return new Response(JSON.stringify({
+              status: "success",
+              message: `${deleteCount} رکورد تشخیص محتوای تکراری با موفقیت حذف شدند.`
+            }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" }
+            });
+          } else {
+            return new Response(JSON.stringify({
+              status: "info",
+              message: "هیچ رکورد تشخیص محتوای تکراری یافت نشد."
+            }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" }
+            });
+          }
+        }
+      } catch (error) {
+        return new Response(JSON.stringify({
+          status: "error",
+          message: `خطا در پاکسازی رکوردهای تشخیص محتوای تکراری: ${error.message}`
+        }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
     }
     
     if (url.pathname === "/webhook") {
