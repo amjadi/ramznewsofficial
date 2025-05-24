@@ -673,6 +673,21 @@ async function isContentDuplicate(post, env) {
     if (!post.description || post.description.trim().length < 50) {
       return false;
     }
+    
+    // ایجاد اثرانگشت دقیق از کل محتوا - راهکار جدید
+    const exactTitle = post.title.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
+      .trim().toLowerCase();
+    const exactDesc = post.description.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
+      .trim().toLowerCase().substring(0, 300);
+    
+    const exactFingerprint = `exact_${simpleHash(exactTitle + exactDesc)}`;
+    
+    // بررسی دقیق با اثرانگشت - راهکار جدید
+    const existingExact = await env.POST_TRACKER.get(exactFingerprint);
+    if (existingExact) {
+      console.log(`محتوای دقیقاً تکراری با اثرانگشت ${exactFingerprint} یافت شد`);
+      return true;
+    }
 
     // بهبود: تمیزسازی و نرمال‌سازی متن‌ها
     const cleanTitle = post.title
@@ -686,7 +701,7 @@ async function isContentDuplicate(post, env) {
       .trim()
       .toLowerCase();
       
-    // NEW: Create a content hash for exact duplicate detection
+    // ایجاد Content Hash برای تشخیص دقیق‌تر تکراری‌ها
     const contentHash = simpleHash((cleanTitle || "") + (cleanDescription ? cleanDescription.substring(0, 200) : ""));
 
     // استخراج کلیدواژه‌های مهم از عنوان
@@ -705,8 +720,8 @@ async function isContentDuplicate(post, env) {
       return false;
     }
 
-    // بررسی 300 پست اخیر برای تشخیص دقیق‌تر
-    const keys = await env.POST_TRACKER.list({ limit: 300 });
+    // بررسی 500 پست اخیر برای تشخیص دقیق‌تر - افزایش از 300 به 500
+    const keys = await env.POST_TRACKER.list({ limit: 500 });
     if (!keys || !keys.keys || keys.keys.length === 0) {
       return false;
     }
@@ -722,9 +737,10 @@ async function isContentDuplicate(post, env) {
     // برای اخبار مهم و فوری آستانه را بالاتر می‌بریم تا به اشتباه فیلتر نشوند
     const isHighPriority = post.isBreakingNews || post.isHighPriorityContent;
 
-    // آستانه‌های متفاوت براساس نوع منبع و اهمیت خبر
-    const titleThreshold = isHighPriority ? 0.85 : isCryptoSource ? 0.75 : 0.65;
-    const descThreshold = isHighPriority ? 0.70 : isCryptoSource ? 0.55 : 0.45;
+    // آستانه‌های متفاوت براساس نوع منبع و اهمیت خبر - بهبود یافته
+    const titleThreshold = isHighPriority ? 0.90 : isCryptoSource ? 0.80 : 0.70;
+    const descThreshold = isHighPriority ? 0.75 : isCryptoSource ? 0.60 : 0.50;
+    const combinedThreshold = isHighPriority ? 0.85 : isCryptoSource ? 0.70 : 0.60;
 
     // استفاده از استراتژی‌های مختلف برای تشخیص تکراری
     for (const key of keys.keys) {
@@ -740,13 +756,13 @@ async function isContentDuplicate(post, env) {
         }
 
         if (storedValue.data && typeof storedValue.data === "object") {
-          // NEW: Check for exact content match by hash
+          // بررسی اثرانگشت محتوا - روش جدید
           if (storedValue.data.contentHash && storedValue.data.contentHash === contentHash) {
             console.log(`محتوای دقیقا تکراری یافت شد با هش: ${contentHash}`);
             return true;
           }
           
-          // Check for exact title match
+          // بررسی تطابق دقیق عنوان
           if (storedValue.data.title && cleanTitle === storedValue.data.title.toLowerCase().trim()) {
             console.log(`عنوان دقیقا تکراری یافت شد: "${storedValue.data.title}"`);
             return true;
@@ -755,7 +771,8 @@ async function isContentDuplicate(post, env) {
           const storedTitle = storedValue.data.title || "";
           const storedSource = storedValue.data.source || "";
           
-          // اگر منبع یکسان و زمان ارسال کمتر از 48 ساعت است، حتی با عناوین متفاوت هم دقت بیشتری به خرج دهیم
+          // اگر منبع یکسان و زمان ارسال کمتر از 72 ساعت است، حتی با عناوین متفاوت هم دقت بیشتری به خرج دهیم
+          // افزایش از 48 به 72 ساعت
           const isSameSource = post.source === storedSource;
           let isRecentFromSameSource = false;
           
@@ -763,11 +780,11 @@ async function isContentDuplicate(post, env) {
             const sentTime = new Date(storedValue.sentAt).getTime();
             const currentTime = new Date().getTime();
             const hoursDiff = (currentTime - sentTime) / (1000 * 60 * 60);
-            isRecentFromSameSource = hoursDiff < 48;
+            isRecentFromSameSource = hoursDiff < 72;
           }
           
-          // اگر از یک منبع در 48 ساعت گذشته پست مشابه داشته‌ایم، آستانه را پایین‌تر بیاوریم
-          const adjustedTitleThreshold = isRecentFromSameSource ? titleThreshold * 0.85 : titleThreshold;
+          // اگر از یک منبع در 72 ساعت گذشته پست مشابه داشته‌ایم، آستانه را پایین‌تر بیاوریم
+          const adjustedTitleThreshold = isRecentFromSameSource ? titleThreshold * 0.80 : titleThreshold;
           
           // برای فیدهای کریپتو فقط با فیدهای کریپتو مقایسه کنیم (مگر اینکه خبر خیلی مهم باشد)
           if (isCryptoSource && !isHighPriority && !(
@@ -804,7 +821,7 @@ async function isContentDuplicate(post, env) {
             const titleSimilarity = calculateSimilarity(cleanTitle, cleanStoredTitle);
             
             // بررسی انطباق دقیق - اگر عنوان‌ها خیلی شبیه هستند
-            if (titleSimilarity > 0.8 || (titleMatchPercentage >= adjustedTitleThreshold && titleWords.length >= 3)) {
+            if (titleSimilarity > 0.85 || (titleMatchPercentage >= adjustedTitleThreshold && titleWords.length >= 3)) {
               console.log(`محتوای مشابه یافت شد (عنوان): "${storedTitle}" با "${post.title}" - تطابق: ${(Math.max(titleSimilarity, titleMatchPercentage) * 100).toFixed(0)}%`);
               return true;
             }
@@ -833,10 +850,10 @@ async function isContentDuplicate(post, env) {
                   ? descMatchCount / descWords.length
                   : 0;
                 
-                // ترکیب نتایج دو روش برای تشخیص دقیق‌تر
+                // ترکیب نتایج دو روش برای تشخیص دقیق‌تر - با آستانه بالاتر
                 const combinedScore = Math.max(descSimilarity, descMatchPercentage) * 0.7 + titleMatchPercentage * 0.3;
                 
-                if (combinedScore >= descThreshold) {
+                if (combinedScore >= combinedThreshold) {
                   console.log(`محتوای مشابه یافت شد (ترکیبی): "${storedTitle}" با "${post.title}" - تطابق: ${(combinedScore * 100).toFixed(0)}%`);
                   return true;
                 }
@@ -882,6 +899,12 @@ async function markPostAsSent(postIdentifier, env, postData = null) {
           
       // Add content hash for better duplicate detection
       postData.contentHash = simpleHash((cleanTitle || "") + cleanDesc);
+      
+      // ذخیره اثرانگشت دقیق برای جلوگیری از تکرار - اضافه شده
+      const exactFingerprint = `exact_${postData.contentHash}`;
+      await env.POST_TRACKER.put(exactFingerprint, "1", {
+        expirationTtl: 86400 * 30 // 30 روز نگهداری می‌شود
+      });
     }
     
     const storedData = {
@@ -897,8 +920,8 @@ async function markPostAsSent(postIdentifier, env, postData = null) {
       postData.source.includes("Tejarat")
     );
     
-    // زمان TTL طولانی‌تر برای منابع کریپتو
-    const ttlDays = isCryptoSource ? STORAGE_TTL_DAYS * 2 : STORAGE_TTL_DAYS;
+    // زمان TTL طولانی‌تر برای همه منابع - افزایش به 30 روز
+    const ttlDays = isCryptoSource ? 30 * 2 : 30;
     
     // ذخیره با TTL مناسب
     await env.POST_TRACKER.put(safeIdentifier, JSON.stringify(storedData), {
@@ -960,6 +983,15 @@ async function sendTelegramPost(post, env) {
       console.log(`محتوای پست "${cleanTitle}" بسیار کوتاه است، پست ارسال نمی‌شود`);
       return false;
     }
+    
+    // بررسی کامل بودن محتوا - اضافه شده
+    const validatedContent = validateContentCompleteness(cleanDescription);
+    if (validatedContent === null) {
+      console.log(`محتوای پست "${cleanTitle}" ناقص است و در میانه جمله قطع شده است، پست ارسال نمی‌شود`);
+      return false;
+    }
+    
+    cleanDescription = validatedContent; // استفاده از محتوای تایید شده
     
     // ⚡️ NEW: Additional validation for content with malformed bullet points or sports/entertainment content
     const bulletPointPattern = /[•]\s*[\u0600-\u06FF\s]+\./;
@@ -2885,6 +2917,32 @@ function findNewsSummary(paragraphs, title) {
   
   // Return the highest scoring paragraph
   return scoredParagraphs[0].paragraph;
+}
+
+// اضافه کردن تابع بررسی کامل بودن محتوا
+function validateContentCompleteness(content) {
+  if (!content) return false;
+  
+  // بررسی پایان طبیعی جمله
+  if (!/[.!?؟،؛]$/.test(content)) {
+    // بررسی اگر در میانه جمله قطع شده
+    const lastSentenceEnd = Math.max(
+      content.lastIndexOf('.'), 
+      content.lastIndexOf('!'),
+      content.lastIndexOf('?'),
+      content.lastIndexOf('؟')
+    );
+    
+    // اگر بیش از 70% محتوا را از دست می‌دهیم، یا آخرین نقطه پایان خیلی قبل‌تر است
+    if (lastSentenceEnd < content.length * 0.7 || lastSentenceEnd < 100) {
+      return null; // محتوا ناقص است
+    }
+    
+    // برش محتوا تا آخرین نقطه کامل
+    return content.substring(0, lastSentenceEnd + 1);
+  }
+  
+  return content; // محتوا کامل است
 }
 
 // Worker export
