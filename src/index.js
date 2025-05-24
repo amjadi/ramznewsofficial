@@ -2232,9 +2232,20 @@ async function processFeeds(env) {
       const highPriorityPosts = allPosts.filter(post => !post.isBreakingNews && post.isHighPriorityContent);
       const otherPosts = allPosts.filter(post => !post.isBreakingNews && !post.isHighPriorityContent);
       
-      // Order: all breaking news + limited high priority + limited regular posts
+      // اگر اخبار فوری داریم، همه را بدون محدودیت و با delay بسیار کم ارسال کن
+      if (breakingNewsPosts.length > 0) {
+        for (const post of breakingNewsPosts) {
+          const isPostSent = await hasPostBeenSent(post.uniqueIdentifier, env);
+          if (!isPostSent) {
+            console.log(`ارسال فوری خبر: ${post.title}`);
+            await sendTelegramPost(post, env);
+            await markPostAsSent(post.uniqueIdentifier, env, post);
+            await delay(500); // فقط نیم ثانیه تاخیر بین اخبار فوری
+          }
+        }
+      }
+      // سپس اخبار مهم و عادی را طبق روال قبلی و با محدودیت ارسال کن
       const postsToProcess = [
-        ...breakingNewsPosts,
         ...highPriorityPosts.slice(0, maxPostsToProcess),
         ...otherPosts.slice(0, Math.max(1, maxPostsToProcess - highPriorityPosts.length))
       ];
@@ -2708,21 +2719,24 @@ function evaluateContentQuality(post) {
       // Check if content has educational or analytical value
       const cryptoAnalysisKeywords = [
         "تحلیل", "پیش‌بینی", "چشم‌انداز", "سرمایه‌گذاری", "سود", "ضرر", "مقاومت", "حمایت",
-        "الگو", "نمودار", "روند", "صعودی", "نزولی", "بازار", "قیمت"
+        "الگو", "نمودار", "روند", "صعودی", "نزولی", "بازار", "قیمت",
+        // کلیدواژه‌های مهم خبری
+        "بیت کوین", "اتریوم", "سقوط", "رشد", "افزایش", "کاهش", "هشدار", "خبر فوری", "فوری"
       ];
-      
       let hasAnalyticalValue = false;
+      let importantKeywordBonus = 0;
       for (const keyword of cryptoAnalysisKeywords) {
         if (post.title.includes(keyword) || post.description.includes(keyword)) {
           hasAnalyticalValue = true;
-          break;
+          importantKeywordBonus += 1;
         }
       }
-      
       if (!hasAnalyticalValue) {
         // اخبار غیرتحلیلی کریپتو اولویت کمتری دارند
         relevantCategory = "low_crypto";
       }
+      // اگر کلیدواژه مهم داشت، امتیاز اضافه بده
+      qualityScore += importantKeywordBonus;
     }
     
     // Main news sources get priority
@@ -2820,7 +2834,7 @@ function evaluateContentQuality(post) {
     
     // Special threshold for crypto news (to limit volume)
     if (isCryptoSource && !isBreakingNews && !isHighPriorityContent) {
-      threshold = 6; // Higher threshold for crypto to limit volume
+      threshold = 4; // کاهش آستانه برای کریپتو
     }
     
     if (qualityScore < threshold) {
