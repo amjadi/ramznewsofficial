@@ -1274,6 +1274,14 @@ async function sendTelegramPost(post, env) {
       }
     }
     
+    // خلاصه‌سازی و فرمت‌بندی هوشمند برای همه پست‌های سیاسی، اقتصادی و رمزارزی
+    const formattedContent = smartFormatAndFilter(finalContent);
+    if (!formattedContent) {
+      console.log(`محتوا قابل خلاصه‌سازی و فرمت‌بندی نبود، ارسال نمی‌شود: ${cleanTitle}`);
+      return false;
+    }
+    finalContent = formattedContent;
+    
     // Construct final message
     const message = `${titleText}${finalContent}${hashtags}${channelLink}`;
     
@@ -2957,6 +2965,48 @@ function validateContentCompleteness(content) {
   }
   
   return content; // محتوا کامل است
+}
+
+// تابع خلاصه‌سازی و فرمت‌بندی هوشمند برای تلگرام
+function smartFormatAndFilter(text) {
+  // حذف جملات تبلیغاتی و زائد
+  text = text.replace(/گزارش‌های بیشتر.*|برای مشاهده.*|در صفحه.*بخوانید.*/g, '');
+
+  // استخراج خطوط قیمت و آمار
+  const priceLines = [];
+  const lines = text.split('\n');
+  for (let line of lines) {
+    if (/دلار|یورو|تتر|پوند|درهم|بورس|سهام|طلا|سکه|قیمت|تومان|ریال/.test(line) && /[۰-۹0-9]+/.test(line)) {
+      // فرمت‌بندی با ایموجی مناسب
+      if (/دلار/.test(line)) priceLines.push('📊 دلار: ' + (line.match(/[۰-۹0-9,]+/g) || []).join(' '));
+      else if (/یورو/.test(line)) priceLines.push('💱 یورو: ' + (line.match(/[۰-۹0-9,]+/g) || []).join(' '));
+      else if (/تتر/.test(line)) priceLines.push('🪙 تتر: ' + (line.match(/[۰-۹0-9,]+/g) || []).join(' '));
+      else if (/طلا/.test(line)) priceLines.push('🥇 طلا: ' + (line.match(/[۰-۹0-9,]+/g) || []).join(' '));
+      else if (/سکه/.test(line)) priceLines.push('🪙 سکه: ' + (line.match(/[۰-۹0-9,]+/g) || []).join(' '));
+      else if (/بورس|سهام/.test(line)) priceLines.push('🏛️ بورس: ' + (line.match(/[۰-۹0-9,]+/g) || []).join(' '));
+      else priceLines.push('🔹 ' + line.trim());
+    }
+  }
+
+  // استخراج جملات کلیدی
+  const sentences = text.split(/[.!؟]\s+/);
+  const keySentences = sentences.filter(s =>
+    /[۰-۹0-9]+/.test(s) || /تغییر|افزایش|کاهش|نتیجه|جمع‌بندی|مهم|جدید|امروز|دیروز|رشد|سقوط|کاهش|افزایش|تحلیل|پیش‌بینی|هشدار/.test(s)
+  ).map(s => s.trim()).filter(s => s.length > 10);
+
+  // ترکیب جملات کلیدی و خطوط قیمت
+  let result = '';
+  if (priceLines.length > 0) {
+    result += '<code>' + priceLines.join('\n') + '</code>\n\n';
+  }
+  if (keySentences.length > 0) {
+    result += keySentences.slice(0, 5).map(s => '• ' + s).join('\n');
+  }
+  result = result.trim();
+
+  // اگر نتیجه قابل قبول نبود، return null
+  if (result.length < 40 || (priceLines.length === 0 && keySentences.length < 2)) return null;
+  return result;
 }
 
 // Worker export
