@@ -1204,385 +1204,161 @@ async function fetchFullContent(url, source) {
       source.includes("Mehr")
     );
     
-    // ارسال درخواست با هدرهای مناسب
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "fa,en-US;q=0.7,en;q=0.3"
-      }
-    });
+    // Use AbortController to implement timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000); // 4 second timeout (reduced from default)
     
-    if (!response.ok) {
-      throw new Error(`Failed to fetch article page: ${response.statusText}`);
-    }
-    
-    const html = await response.text();
-    let content = "";
-    let image = null;
-    
-    // ⚡️ پیمایش‌گر بهبود یافته برای استخراج محتوا
-    const extractContentFromHTML = (html, source) => {
-      // الگوهای مختلف برای شناسایی بخش اصلی محتوا
-      const contentSelectors = [
-        // خبرگزاری‌ها
-        /<div[^>]*class="[^"]*article-body[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-        /<div[^>]*class="[^"]*item-text[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-        /<div[^>]*class="[^"]*news-text[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-        /<div[^>]*class="[^"]*main-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-        /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-        /<div[^>]*class="[^"]*content-inner[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-        /<article[^>]*class="[^"]*post[^"]*"[^>]*>([\s\S]*?)<\/article>/i,
-        /<div[^>]*class="[^"]*post-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-        /<div[^>]*id="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-        /<div[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i
-      ];
+    try {
+      // ارسال درخواست با هدرهای مناسب
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+          "Accept-Language": "fa,en-US;q=0.7,en;q=0.3"
+        },
+        signal: controller.signal
+      });
       
-      // الگوهای استخراج خلاصه خبر (لید)
-      const summarySelectors = [
-        /<div[^>]*class="[^"]*lead[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-        /<div[^>]*class="[^"]*summary[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-        /<p[^>]*class="[^"]*summary[^"]*"[^>]*>([\s\S]*?)<\/p>/i,
-        /<p[^>]*class="[^"]*lead[^"]*"[^>]*>([\s\S]*?)<\/p>/i,
-        /<div[^>]*class="[^"]*article-summary[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-        /<div[^>]*class="[^"]*news-summary[^"]*"[^>]*>([\s\S]*?)<\/div>/i
-      ];
+      clearTimeout(timeoutId);
       
-      // تلاش برای استخراج خلاصه خبر
-      let summary = "";
-      for (const selector of summarySelectors) {
-        const match = selector.exec(html);
-        if (match) {
-          summary = match[1].trim();
-          break;
-        }
+      if (!response.ok) {
+        throw new Error(`Failed to fetch article page: ${response.statusText}`);
       }
       
-      // تلاش برای استخراج محتوای اصلی
-      let articleBody = "";
-      for (const selector of contentSelectors) {
-        const match = selector.exec(html);
-        if (match) {
-          articleBody = match[1].trim();
-          break;
-        }
-      }
+      const html = await response.text();
+      let content = "";
+      let image = null;
       
-      // اگر هیچ محتوایی پیدا نشد، سعی می‌کنیم با روش ساده‌تر استخراج کنیم
-      if (!articleBody) {
-        const bodyMatch = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(html);
-        if (bodyMatch) {
-          // حذف هدر و فوتر و سایدبار از بدنه
-          let bodyContent = bodyMatch[1];
-          // حذف منوها، هدر، فوتر و بخش‌های نامربوط
-          bodyContent = bodyContent
-            .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, "")
-            .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, "")
-            .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, "")
-            .replace(/<aside[^>]*>[\s\S]*?<\/aside>/gi, "")
-            .replace(/<div[^>]*class="[^"]*sidebar[^"]*"[^>]*>[\s\S]*?<\/div>/gi, "")
-            .replace(/<div[^>]*class="[^"]*menu[^"]*"[^>]*>[\s\S]*?<\/div>/gi, "")
-            .replace(/<div[^>]*class="[^"]*comment[^"]*"[^>]*>[\s\S]*?<\/div>/gi, "")
-            .replace(/<div[^>]*class="[^"]*related[^"]*"[^>]*>[\s\S]*?<\/div>/gi, "");
+      // Simplified content extraction - focus on main content only
+      // Instead of using multiple complex regex patterns, use a more targeted approach
+      const extractContent = (html, source) => {
+        // Simple function to extract text from HTML
+        const extractText = (html) => {
+          // Remove scripts and style tags first
+          let filtered = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+                             .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "");
           
-          // استخراج پاراگراف‌ها از بدنه باقیمانده
+          // Extract paragraphs with at least 20 characters
           const paragraphs = [];
           const paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
-          let paragraphMatch;
+          let match;
           
-          while ((paragraphMatch = paragraphRegex.exec(bodyContent)) !== null) {
-            if (paragraphMatch[1].trim().length > 20) {  // حداقل طول معنادار
-              paragraphs.push(sanitizeText(paragraphMatch[1]));
+          while ((match = paragraphRegex.exec(filtered)) !== null) {
+            const cleanText = sanitizeText(match[1]);
+            if (cleanText && cleanText.length > 20) {
+              paragraphs.push(cleanText);
+            }
+            
+            // Limit to maximum 10 paragraphs to save CPU
+            if (paragraphs.length >= 10) break;
+          }
+          
+          return paragraphs.join("\n\n");
+        };
+        
+        // Try to extract content based on source
+        if (source === "BBC Persian") {
+          const articleMatch = /<article[^>]*>([\s\S]*?)<\/article>/i.exec(html);
+          return articleMatch ? extractText(articleMatch[1]) : "";
+        } 
+        else if (source === "DW Persian") {
+          const articleMatch = /<div[^>]*class="[^"]*longText[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) || 
+                              /<div[^>]*class="[^"]*article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html);
+          return articleMatch ? extractText(articleMatch[1]) : "";
+        }
+        else if (source === "Euronews Persian") {
+          const articleMatch = /<div[^>]*class="[^"]*article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) ||
+                              /<div[^>]*class="[^"]*article__content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html);
+          return articleMatch ? extractText(articleMatch[1]) : "";
+        }
+        else {
+          // Generic content extraction for other sources - try common content containers
+          const contentMatches = [
+            /<div[^>]*class="[^"]*article-body[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+            /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+            /<div[^>]*class="[^"]*post-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i
+          ];
+          
+          for (const regex of contentMatches) {
+            const match = regex.exec(html);
+            if (match) {
+              return extractText(match[1]);
             }
           }
           
-          if (paragraphs.length > 0) {
-            articleBody = paragraphs.join("\n\n");
+          // Fallback to generic paragraph extraction
+          return extractText(html);
+        }
+      };
+      
+      // Simplified image extraction
+      const extractImage = (html) => {
+        // Try to find Open Graph image first (most reliable)
+        const ogMatch = /<meta[^>]+property="og:image"[^>]+content="([^">]+)"/i.exec(html);
+        if (ogMatch && ogMatch[1]) return ogMatch[1];
+        
+        // Try Twitter image next
+        const twitterMatch = /<meta[^>]+name="twitter:image"[^>]+content="([^">]+)"/i.exec(html);
+        if (twitterMatch && twitterMatch[1]) return twitterMatch[1];
+        
+        // Finally try any image tag with featured/main/article class
+        const imgMatch = /<img[^>]+class="[^"]*(?:featured|main|article)[^"]*"[^>]+src="([^">]+)"/i.exec(html);
+        if (imgMatch && imgMatch[1]) return imgMatch[1];
+        
+        return null;
+      };
+      
+      // Extract content and image
+      content = extractContent(html, source);
+      image = extractImage(html);
+      
+      // Convert relative URLs to absolute
+      if (image && !image.startsWith("http")) {
+        try {
+          const urlObj = new URL(url);
+          if (image.startsWith("/")) {
+            image = `${urlObj.protocol}//${urlObj.hostname}${image}`;
+          } else {
+            image = `${urlObj.protocol}//${urlObj.hostname}/${image}`;
           }
+        } catch (e) {
+          // Ignore URL conversion errors
+          image = null;
         }
       }
       
-      // پردازش محتوای استخراج شده
-      if (articleBody) {
-        // استخراج پاراگراف‌ها
-        const paragraphs = [];
-        const paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
-        let paragraphMatch;
-        
-        while ((paragraphMatch = paragraphRegex.exec(articleBody)) !== null) {
-          const sanitizedParagraph = sanitizeText(paragraphMatch[1]);
-          // فقط پاراگراف‌های با طول معنادار (بیش از 20 کاراکتر) را نگه می‌داریم
-          if (sanitizedParagraph && sanitizedParagraph.trim().length > 20) {
-            paragraphs.push(sanitizedParagraph);
-          }
-        }
-        
-        // همچنین از سایر تگ‌های متنی استخراج کنیم
-        const headingRegex = /<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi;
-        let headingMatch;
-        
-        while ((headingMatch = headingRegex.exec(articleBody)) !== null) {
-          const sanitizedHeading = sanitizeText(headingMatch[1]);
-          if (sanitizedHeading && sanitizedHeading.trim().length > 0) {
-            paragraphs.push(sanitizedHeading);
-          }
-        }
-        
-        // بررسی وجود لیست‌ها
-        const listItemRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
-        const listItems = [];
-        let listItemMatch;
-        
-        while ((listItemMatch = listItemRegex.exec(articleBody)) !== null) {
-          const sanitizedItem = sanitizeText(listItemMatch[1]);
-          if (sanitizedItem && sanitizedItem.trim().length > 0) {
-            listItems.push(`• ${sanitizedItem}`);
-          }
-        }
-        
-        if (listItems.length > 0) {
-          paragraphs.push(listItems.join("\n"));
-        }
-        
-        // ترکیب خلاصه با محتوا
-        let finalContent = "";
-        if (summary && !paragraphs.some(p => p.includes(summary))) {
-          const sanitizedSummary = sanitizeText(summary);
-          if (sanitizedSummary.length > 30) {
-            finalContent = sanitizedSummary + "\n\n";
-          }
-        }
-        
-        finalContent += paragraphs.join("\n\n");
-        return finalContent;
-      }
-      
-      return "";
-    };
-    
-    // ⚡️ استخراج هوشمند تصویر اصلی
-    const extractMainImage = (html) => {
-      // الگوهای متنوع برای استخراج تصویر اصلی
-      const imageSelectors = [
-        // Open Graph image (پرکاربردترین)
-        /<meta[^>]+property="og:image"[^>]+content="([^">]+)"/i,
-        // Twitter image
-        /<meta[^>]+name="twitter:image"[^>]+content="([^">]+)"/i,
-        // Featured image
-        /<img[^>]+class="[^"]*(?:featured-image|main-image|thumbnail|article-image)[^"]*"[^>]+src="([^">]+)"/i,
-        // Image inside figure
-        /<figure[^>]*>\s*<img[^>]+src="([^">]+)"[^>]*>/i,
-        // First image with data-src attribute
-        /<img[^>]+data-src="([^">]+)"[^>]*>/i,
-        // First image with src attribute
-        /<img[^>]+src="([^">]+)"[^>]*>/i
-      ];
-      
-      for (const selector of imageSelectors) {
-        const match = selector.exec(html);
-        if (match && match[1]) {
-          const imageUrl = match[1];
-          
-          // فیلتر کردن تصاویر نامعتبر
-          if (
-            !imageUrl.includes("logo") && 
-            !imageUrl.includes("icon") && 
-            !imageUrl.includes("banner") &&
-            !imageUrl.includes("avatar") &&
-            imageUrl.match(/\.(jpg|jpeg|png|webp)($|\?)/i)
-          ) {
-            return imageUrl;
-          }
-        }
-      }
-      
-      return null;
-    };
-    
-    // پردازش اختصاصی برای هر منبع
-    if (isCryptoSource) {
-      // استخراج محتوا برای منابع کریپتویی
-      content = extractContentFromHTML(html, source);
-      image = extractMainImage(html);
-    } else if (source === "BBC Persian") {
-      // کد اختصاصی BBC Persian
-      const articleBodyMatch = /<article[^>]*>([\s\S]*?)<\/article>/i.exec(html);
-      if (articleBodyMatch) {
-        const articleBody = articleBodyMatch[1];
-        const paragraphs = [];
-        const paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
-        let paragraphMatch;
-        
-        while ((paragraphMatch = paragraphRegex.exec(articleBody)) !== null) {
-          paragraphs.push(sanitizeText(paragraphMatch[1]));
-        }
-        
-        content = paragraphs.join("\n\n");
-        
-        // استخراج تصویر اصلی BBC
-        image = extractMainImage(html);
-        if (!image) {
-          const imgMatch = /<img[^>]+src="([^">]+)"[^>]*data-ratio="original"/i.exec(articleBody);
-          if (imgMatch) {
-            image = imgMatch[1];
-          }
-        }
-      }
-    } else if (source === "DW Persian") {
-      // استخراج محتوا برای DW Persian
-      const articleBodyMatch = /<div[^>]*class="[^"]*longText[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) || 
-                              /<div[^>]*class="[^"]*article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) ||
-                              /<div[^>]*class="[^"]*dw-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html);
-      
-      // استخراج خلاصه خبر DW
-      const summaryMatch = /<p[^>]*class="[^"]*intro[^"]*"[^>]*>([\s\S]*?)<\/p>/i.exec(html);
-      let summary = "";
-      if (summaryMatch) {
-        summary = sanitizeText(summaryMatch[1]);
-      }
-      
-      if (articleBodyMatch) {
-        const articleBody = articleBodyMatch[1];
-        const paragraphs = [];
-        const paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
-        let paragraphMatch;
-        
-        while ((paragraphMatch = paragraphRegex.exec(articleBody)) !== null) {
-          // پاکسازی محتوای تبلیغاتی DW
-          const cleanParagraph = paragraphMatch[1]
-            .replace(/اینترنت بدون سانسور با سایفون دویچه‌ وله/g, "")
-            .replace(/اینترنت بدون سانسور با سایفون/g, "")
-            .replace(/دویچه وله فارسی را در .* دنبال کنید/g, "")
-            .replace(/بیشتر بخوانید:.*/g, "");
-          
-          if (cleanParagraph && cleanParagraph.trim().length > 0) {
-            const sanitizedParagraph = sanitizeText(cleanParagraph);
-            if (sanitizedParagraph && sanitizedParagraph.trim().length > 0) {
-              paragraphs.push(sanitizedParagraph);
-            }
-          }
-        }
-        
-        // اضافه کردن خلاصه به ابتدای محتوا
-        if (summary && summary.trim().length > 0) {
-          content = summary + "\n\n" + paragraphs.join("\n\n");
-        } else {
-          content = paragraphs.join("\n\n");
-        }
-        
-        // فرمت‌بندی بهتر پاراگراف‌ها
+      // Final cleanup
+      if (content) {
         content = content
-          .replace(/\.\s+([A-Z\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF])/g, ".\n\n$1")
-          .replace(/\n{3,}/g, "\n\n");
+          .replace(/\n{3,}/g, "\n\n")
+          .replace(/https?:\/\/\S+\s*$/g, "")
+          .trim();
         
-        // استخراج تصویر اصلی
-        image = extractMainImage(html);
-      }
-    } else if (source === "Euronews Persian") {
-      // استخراج محتوا برای Euronews Persian
-      const articleBodyMatch = /<div[^>]*class="[^"]*c-article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) ||
-                              /<div[^>]*class="[^"]*article__content[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) ||
-                              /<div[^>]*class="[^"]*article-text[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html);
-      
-      // استخراج خلاصه خبر Euronews
-      const summaryMatch = /<div[^>]*class="[^"]*c-article-summary[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html) ||
-                         /<p[^>]*class="[^"]*article__description[^"]*"[^>]*>([\s\S]*?)<\/p>/i.exec(html);
-      
-      let summary = "";
-      if (summaryMatch) {
-        summary = sanitizeText(summaryMatch[1]);
-      }
-      
-      if (articleBodyMatch) {
-        const articleBody = articleBodyMatch[1];
-        const paragraphs = [];
-        const paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
-        let paragraphMatch;
-        
-        while ((paragraphMatch = paragraphRegex.exec(articleBody)) !== null) {
-          // پاکسازی محتوای تبلیغاتی Euronews
-          const cleanParagraph = paragraphMatch[1]
-            .replace(/یورونیوز در «سرخط خبرها» مهم‌ترین رویدادهای ایران و جهان را در دو نوبت مرور می‌کند.*/g, "")
-            .replace(/«مجله شامگاهی» برنامه‌ای تصویری از یورونیوز است که هر شب.*/g, "")
-            .replace(/«سرخط خبرها» مجموعه‌ای است که یورونیوز [^\.]*\./g, "")
-            .replace(/در این قسمت مهم‌ترین عناوین خبری.*/g, "")
-            .replace(/یورونیوز فارسی را در .* دنبال کنید/g, "")
-            .replace(/یورونیوز فارسی \/ .*/g, "");
-          
-          if (cleanParagraph && cleanParagraph.trim().length > 0) {
-            const sanitizedParagraph = sanitizeText(cleanParagraph);
-            if (sanitizedParagraph && sanitizedParagraph.trim().length > 0) {
-              paragraphs.push(sanitizedParagraph);
-            }
-          }
+        if (content.length > 0 && !/[.!?؟،؛]$/.test(content)) {
+          content += ".";
         }
-        
-        // اضافه کردن خلاصه به ابتدای محتوا
-        if (summary && summary.trim().length > 0) {
-          content = summary + "\n\n" + paragraphs.join("\n\n");
-        } else {
-          content = paragraphs.join("\n\n");
-        }
-        
-        // استخراج تصویر اصلی
-        image = extractMainImage(html);
       }
-    } else {
-      // استخراج عمومی برای سایر منابع
-      content = extractContentFromHTML(html, source);
-      image = extractMainImage(html);
-    }
-    
-    // تبدیل URL‌های نسبی تصاویر به مطلق
-    if (image && !image.startsWith("http")) {
-      try {
-        const urlObj = new URL(url);
-        if (image.startsWith("/")) {
-          image = `${urlObj.protocol}//${urlObj.hostname}${image}`;
-        } else {
-          image = `${urlObj.protocol}//${urlObj.hostname}/${image}`;
-        }
-      } catch (e) {
-        console.log(`خطا در تبدیل URL نسبی به مطلق: ${e.message}`);
-      }
-    }
-    
-    // پاکسازی نهایی محتوا
-    if (content) {
-      content = content
-        .replace(/عکس:.*?(?=\n|$)/g, "")
-        .replace(/منبع:.*?(?=\n|$)/g, "")
-        .replace(/تصویر:.*?(?=\n|$)/g, "")
-        .replace(/تبلیغات/g, "")
-        .replace(/https?:\/\/p\.dw\.com\/p\/\w+/g, "")
-        .replace(/\n{3,}/g, "\n\n");
-        
-      // حذف آدرس‌های اضافی از انتهای محتوا
-      content = content.replace(/https?:\/\/\S+\s*$/g, "");
       
-      // اطمینان از اینکه محتوا با نقطه تمام می‌شود
-      if (content.length > 0 && !/[.!?؟،؛]$/.test(content)) {
-        content += ".";
+      // Report results
+      if (content) {
+        console.log(`محتوای کامل با ${content.length} کاراکتر دریافت شد`);
+      } else {
+        console.log(`نتوانستیم محتوای مقاله را استخراج کنیم`);
       }
+      
+      return {
+        content: content || "",
+        image: image || null
+      };
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        console.log(`درخواست برای دریافت ${url} به دلیل زمان طولانی لغو شد`);
+      } else {
+        throw error;
+      }
+      return { content: "", image: null };
     }
-    
-    // گزارش وضعیت استخراج محتوا
-    if (content) {
-      console.log(`محتوای کامل با ${content.length} کاراکتر دریافت شد`);
-    } else {
-      console.log(`نتوانستیم محتوای مقاله را استخراج کنیم`);
-    }
-    
-    if (image) {
-      console.log(`تصویر مقاله دریافت شد: ${image.substring(0, 50)}...`);
-    } else {
-      console.log(`تصویری برای مقاله یافت نشد`);
-    }
-    
-    return {
-      content: content || "",
-      image: image || null
-    };
   } catch (error) {
     console.error(`Error fetching full content from ${url}: ${error.message}`);
     return {
@@ -1631,7 +1407,7 @@ async function fetchLatestPosts(feedUrl, limit = 5) {
         "Accept-Language": "fa,en-US;q=0.7,en;q=0.3"
       },
       // Add timeout to prevent hanging requests
-      timeout: 10000
+      timeout: 5000 // Reduced from 10000 to 5000
     });
     
     if (!response.ok) {
@@ -1998,58 +1774,69 @@ async function processFeeds(env) {
       console.log(`شروع پردازش ${feeds.length} فید با اولویت ${priorityName}`);
       
       const allPosts = [];
-      const fetchPromises = [];
       
-      // Fetch posts from all feeds in parallel
-      for (const feed of feeds) {
-        const postsPerFeed = feed.category === "crypto" ? 10 : // رمزارزی بیشتر
-                            feed.category === "general" ? 8 : // سیاسی متوسط
-                            5; // اقتصادی کمتر
-                            
-        const fetchPromise = fetchLatestPosts(feed, postsPerFeed)
-          .then(posts => {
-            // Initial quality check for each post
-            return posts.map(post => {
-              // Add identifier and do basic quality check
-              const uniqueIdentifier = generatePostIdentifier(post);
-              const normalizedTitle = post.title.trim().replace(/\s+/g, " ").toLowerCase();
-              const qualityEvaluation = evaluateContentQuality(post);
-              
-              // Add content hash
-              const cleanTitle = post.title.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
-                .trim().toLowerCase();
-              const cleanDesc = post.description ? 
-                post.description.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
-                  .trim().toLowerCase().substring(0, 200) : "";
-              const contentHash = simpleHash((cleanTitle || "") + cleanDesc);
-              
-              return {
-                ...post,
-                feed,
-                uniqueIdentifier,
-                normalizedTitle,
-                contentHash,
-                qualityEvaluation,
-                category: feed.category
-              };
-            }).filter(post => post.qualityEvaluation.isHighQuality);
-          })
-          .catch(error => {
-            console.error(`خطا در دریافت فید ${feed.source}: ${error.message}`);
-            failureCount++;
-            return [];
-          });
+      // Process feeds in smaller batches to reduce CPU load
+      const BATCH_SIZE = 3; // Process only 3 feeds at a time
+      for (let i = 0; i < feeds.length; i += BATCH_SIZE) {
+        const batchFeeds = feeds.slice(i, i + BATCH_SIZE);
+        const fetchPromises = [];
         
-        fetchPromises.push(fetchPromise);
+        // Fetch posts from current batch of feeds
+        for (const feed of batchFeeds) {
+          const postsPerFeed = feed.category === "crypto" ? 5 : // Reduced from 10 to 5
+                              feed.category === "general" ? 3 : // Reduced from 8 to 3
+                              2; // Reduced from 5 to 2
+                              
+          const fetchPromise = fetchLatestPosts(feed, postsPerFeed)
+            .then(posts => {
+              // Initial quality check for each post
+              return posts.map(post => {
+                // Add identifier and do basic quality check
+                const uniqueIdentifier = generatePostIdentifier(post);
+                const normalizedTitle = post.title.trim().replace(/\s+/g, " ").toLowerCase();
+                const qualityEvaluation = evaluateContentQuality(post);
+                
+                // Add content hash
+                const cleanTitle = post.title.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
+                  .trim().toLowerCase();
+                const cleanDesc = post.description ? 
+                  post.description.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/g, " ")
+                    .trim().toLowerCase().substring(0, 200) : "";
+                const contentHash = simpleHash((cleanTitle || "") + cleanDesc);
+                
+                return {
+                  ...post,
+                  feed,
+                  uniqueIdentifier,
+                  normalizedTitle,
+                  contentHash,
+                  qualityEvaluation,
+                  category: feed.category
+                };
+              }).filter(post => post.qualityEvaluation.isHighQuality);
+            })
+            .catch(error => {
+              console.error(`خطا در دریافت فید ${feed.source}: ${error.message}`);
+              failureCount++;
+              return [];
+            });
+          
+          fetchPromises.push(fetchPromise);
+        }
+        
+        // Wait for current batch to complete
+        const batchResults = await Promise.all(fetchPromises);
+        
+        // Combine posts from current batch
+        batchResults.forEach(posts => {
+          allPosts.push(...posts);
+        });
+        
+        // Add a small delay between batches to prevent CPU overload
+        if (i + BATCH_SIZE < feeds.length) {
+          await delay(500);
+        }
       }
-      
-      // Wait for all feed fetching to complete
-      const results = await Promise.all(fetchPromises);
-      
-      // Combine all posts from all feeds
-      results.forEach(posts => {
-        allPosts.push(...posts);
-      });
       
       console.log(`${allPosts.length} پست با کیفیت مناسب از فیدهای اولویت ${priorityName} دریافت شد`);
       
@@ -2113,10 +1900,10 @@ async function processFeeds(env) {
         return b.qualityEvaluation.qualityScore - a.qualityEvaluation.qualityScore;
       });
       
-      // Adjust post limits to prioritize crypto and political content
-      const maxPostsToProcess = priorityName.includes("بالا") ? 8 : // ارسال حداکثر 8 پست از اولویت بالا
-                               priorityName.includes("متوسط") ? 2 : // حداکثر 2 پست از اقتصادی
-                               1; // حداکثر 1 پست از بقیه
+      // Adjust post limits to prioritize crypto and political content - REDUCED LIMITS
+      const maxPostsToProcess = priorityName.includes("بالا") ? 4 : // Reduced from 8 to 4
+                               priorityName.includes("متوسط") ? 2 : // Keep 2 posts from medium priority
+                               1; // Keep 1 post from low priority
       
       // But always process breaking news regardless of limits
       const breakingNewsPosts = filteredPosts.filter(post => post.isBreakingNews);
@@ -2125,7 +1912,8 @@ async function processFeeds(env) {
       
       // اگر اخبار فوری داریم، همه را بدون محدودیت و با delay بسیار کم ارسال کن
       if (breakingNewsPosts.length > 0) {
-        for (const post of breakingNewsPosts) {
+        // Process breaking news posts in sequence to prevent CPU overload
+        for (const post of breakingNewsPosts.slice(0, 3)) { // Limit to top 3 breaking news
           // Check if post exists by normalized title 
           const titleKey = `title_${simpleHash(post.normalizedTitle)}`;
           const isDuplicateTitle = await hasPostBeenSent(titleKey, env);
@@ -2147,7 +1935,7 @@ async function processFeeds(env) {
             
             await sendTelegramPost(post, env);
             await markPostAsSent(post.uniqueIdentifier, env, post);
-            await delay(500); // فقط نیم ثانیه تاخیر بین اخبار فوری
+            await delay(2000); // Increased from 500ms to 2s to reduce CPU load
           } else {
             console.log(`خبر فوری "${post.title}" قبلاً ارسال شده است، نادیده گرفتن...`);
             duplicateCount++;
@@ -2160,20 +1948,17 @@ async function processFeeds(env) {
       const politicalPosts = otherPosts.filter(post => post.category === "general");
       const economyPosts = otherPosts.filter(post => post.category === "finance");
       
-      // ترکیب پست‌ها با اولویت به رمزارزها و سیاسی
+      // ترکیب پست‌ها با اولویت به رمزارزها و سیاسی - REDUCED LIMITS
       const postsToProcess = [
-        ...highPriorityPosts.slice(0, 3), // حداکثر 3 خبر مهم
-        ...cryptoPosts.slice(0, 3),       // حداکثر 3 خبر رمزارزی
-        ...politicalPosts.slice(0, 3),    // حداکثر 3 خبر سیاسی
-        ...economyPosts.slice(0, 1)       // حداکثر 1 خبر اقتصادی
-      ].slice(0, maxPostsToProcess);      // با رعایت محدودیت کلی
+        ...highPriorityPosts.slice(0, 2),    // Reduced from 3 to 2
+        ...cryptoPosts.slice(0, 2),          // Reduced from 3 to 2
+        ...politicalPosts.slice(0, 2),       // Reduced from 3 to 2
+        ...economyPosts.slice(0, 1)          // Keep 1 economy post
+      ].slice(0, maxPostsToProcess);         // With overall limit
       
       console.log(`پردازش ${postsToProcess.length} پست از مجموع ${filteredPosts.length} پست دریافتی (${breakingNewsPosts.length} خبر فوری، ${cryptoPosts.length} خبر رمزارزی، ${politicalPosts.length} خبر سیاسی)`);
       
-      // Process posts by priority
-      const postPromises = [];
-      
-      // Process each post
+      // Process posts sequentially to reduce CPU load
       for (const post of postsToProcess) {
         // Skip posts with quality score below threshold (unless breaking news)
         if (!post.isBreakingNews && 
@@ -2184,99 +1969,90 @@ async function processFeeds(env) {
           continue;
         }
         
-        // Process each post asynchronously but in order
-        const postPromise = (async () => {
-          // Check multiple identifiers for duplicates
-          const titleKey = `title_${simpleHash(post.normalizedTitle)}`;
-          const contentKey = `exact_${post.contentHash}`;
-          
-          const isDuplicateTitle = await hasPostBeenSent(titleKey, env);
-          const isDuplicateContent = await hasPostBeenSent(contentKey, env);
-          const isPostSent = await hasPostBeenSent(post.uniqueIdentifier, env);
-          
-          let isDuplicate = isPostSent || isDuplicateTitle || isDuplicateContent;
-          
-          // Only perform expensive content similarity check if basic checks passed
-          if (!isDuplicate && !post.isBreakingNews) {
-            const contentDuplicate = await isContentDuplicate(post, env);
-            if (contentDuplicate) {
-              console.log(`پست "${post.title}" دارای محتوای مشابه با پست‌های قبلی است، نادیده گرفتن...`);
-              isDuplicate = true;
-              duplicateCount++;
-            }
+        // Check multiple identifiers for duplicates
+        const titleKey = `title_${simpleHash(post.normalizedTitle)}`;
+        const contentKey = `exact_${post.contentHash}`;
+        
+        const isDuplicateTitle = await hasPostBeenSent(titleKey, env);
+        const isDuplicateContent = await hasPostBeenSent(contentKey, env);
+        const isPostSent = await hasPostBeenSent(post.uniqueIdentifier, env);
+        
+        let isDuplicate = isPostSent || isDuplicateTitle || isDuplicateContent;
+        
+        // Only perform expensive content similarity check if basic checks passed
+        if (!isDuplicate && !post.isBreakingNews) {
+          const contentDuplicate = await isContentDuplicate(post, env);
+          if (contentDuplicate) {
+            console.log(`پست "${post.title}" دارای محتوای مشابه با پست‌های قبلی است، نادیده گرفتن...`);
+            isDuplicate = true;
+            duplicateCount++;
           }
+        }
+        
+        // Send post if not a duplicate
+        if (!isDuplicate) {
+          // Longer delays between posts to reduce CPU load
+          const sendDelay = post.isBreakingNews ? 3000 : // Increased from 1000ms to 3000ms
+                           post.isHighPriorityContent ? 5000 : // Increased from 2000ms to 5000ms
+                           DELAY_BETWEEN_POSTS;
           
-          // Send post if not a duplicate
-          if (!isDuplicate) {
-            // Shorter delay for breaking news
-            const sendDelay = post.isBreakingNews ? 1000 : 
-                             post.isHighPriorityContent ? 2000 : 
-                             DELAY_BETWEEN_POSTS;
+          console.log(`ارسال پست با اولویت ${priorityName} از ${post.source}: ${post.title} (امتیاز کیفی: ${post.qualityEvaluation.qualityScore})`);
+          const success = await sendTelegramPost(post, env);
+          
+          if (success) {
+            // Save sent post data
+            const postData = {
+              title: post.title,
+              link: post.link,
+              source: post.source,
+              description: post.description ? post.description.substring(0, 300) : "",
+              qualityScore: post.qualityEvaluation.qualityScore || 0,
+              isBreakingNews: post.isBreakingNews || false,
+              isHighPriorityContent: post.isHighPriorityContent || false,
+              sentAt: new Date().toISOString()
+            };
             
-            console.log(`ارسال پست با اولویت ${priorityName} از ${post.source}: ${post.title} (امتیاز کیفی: ${post.qualityEvaluation.qualityScore})`);
-            const success = await sendTelegramPost(post, env);
+            await markPostAsSent(post.uniqueIdentifier, env, postData);
             
-            if (success) {
-              // Save sent post data
-              const postData = {
-                title: post.title,
-                link: post.link,
-                source: post.source,
-                description: post.description ? post.description.substring(0, 300) : "",
-                qualityScore: post.qualityEvaluation.qualityScore || 0,
-                isBreakingNews: post.isBreakingNews || false,
-                isHighPriorityContent: post.isHighPriorityContent || false,
+            for (const additionalId of [post.uniqueIdentifier, titleKey, contentKey]) {
+              await markPostAsSent(additionalId, env, {
+                referenceId: post.uniqueIdentifier,
                 sentAt: new Date().toISOString()
-              };
-              
-              await markPostAsSent(post.uniqueIdentifier, env, postData);
-              
-              for (const additionalId of [post.uniqueIdentifier, titleKey, contentKey]) {
-                await markPostAsSent(additionalId, env, {
-                  referenceId: post.uniqueIdentifier,
-                  sentAt: new Date().toISOString()
-                });
-              }
-              
-              // Add to processed tracking collections
-              GLOBAL_POST_TRACKING.processedHashes.add(post.contentHash);
-              GLOBAL_POST_TRACKING.processedTitles.add(post.normalizedTitle);
-              if (post.link) GLOBAL_POST_TRACKING.processedUrls.add(post.link);
-              
-              successCount++;
-              await delay(sendDelay);
-              return true;
-            } else {
-              failureCount++;
-              return false;
+              });
             }
+            
+            // Add to processed tracking collections
+            GLOBAL_POST_TRACKING.processedHashes.add(post.contentHash);
+            GLOBAL_POST_TRACKING.processedTitles.add(post.normalizedTitle);
+            if (post.link) GLOBAL_POST_TRACKING.processedUrls.add(post.link);
+            
+            successCount++;
+            await delay(sendDelay);
           } else {
-            console.log(`پست قبلاً ارسال شده است: ${post.title}`);
-            return false;
+            failureCount++;
           }
-        })();
-        
-        postPromises.push(postPromise);
-        
-        // Wait for the current post to be processed before moving to the next
-        // This ensures posts are sent in order of priority
-        await postPromise;
+        } else {
+          console.log(`پست قبلاً ارسال شده است: ${post.title}`);
+        }
       }
-      
-      // Wait for all posts to be processed
-      await Promise.all(postPromises);
       
       return allPosts.length;
     };
     
-    // Process feeds by priority:
-    // 1. High priority (political news) - lower quality threshold
+    // Process feeds by priority (one category at a time)
+    // First, high priority feeds (political news)
     await processFeedsByPriority(highPriorityFeeds, "بالا (سیاسی)", 3);
     
-    // 2. Medium priority (economic news) - medium quality threshold
+    // Give CPU time to recover
+    await delay(2000);
+    
+    // Then medium priority feeds (economic news)
     await processFeedsByPriority(mediumPriorityFeeds, "متوسط (اقتصادی)", 5);
     
-    // 3. Low priority (crypto news) - higher quality threshold
+    // Give CPU time to recover
+    await delay(2000);
+    
+    // Finally low priority feeds (other)
     await processFeedsByPriority(lowPriorityFeeds, "پایین (کریپتو)", 6);
     
     // Final report
