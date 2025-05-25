@@ -1,4 +1,4 @@
-name = "rss-telegram-bot"
+name = "ramznewsofficial"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
 
@@ -6,9 +6,7 @@ compatibility_date = "2024-01-01"
 # Run every 30 minutes
 crons = ["*/30 * * * *"] 
 
-# Uncomment to use local KV in dev mode
-preview_id = "your-preview-kv-namespace-id-here"  # Replace with preview KV ID
-
+# KV namespace configuration
 [[kv_namespaces]]
 binding = "POST_TRACKER"
-id = "your-kv-namespace-id-here"  # Replace with actual KV namespace ID
+id = "6275727dfdcf4de29088dba0313e6dcc"

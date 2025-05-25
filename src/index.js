@@ -629,6 +629,7 @@ async function hasPostBeenSent(postIdentifier, env) {
   try {
     if (!env || !env.POST_TRACKER) {
       console.error("POST_TRACKER KV binding is not available");
+      // Return false to allow posts to be sent when KV is not available
       return false;
     }
     
@@ -683,6 +684,7 @@ async function hasPostBeenSent(postIdentifier, env) {
 async function isContentDuplicate(post, env) {
   try {
     if (!env || !env.POST_TRACKER || !post.title) {
+      // Return false to allow posts to be sent when KV is not available
       return false;
     }
 
@@ -895,7 +897,8 @@ async function markPostAsSent(postIdentifier, env, postData = null) {
   try {
     if (!env || !env.POST_TRACKER) {
       console.error("POST_TRACKER KV binding is not available");
-      return false;
+      // Return true to indicate success even when KV is not available
+      return true;
     }
     
     const safeIdentifier = postIdentifier
@@ -2875,25 +2878,25 @@ function smartFormatAndFilter(text) {
   return result;
 }
 
-// Worker export
+// Export for Cloudflare Workers
 export default {
-  // تعریف متد scheduled برای پردازش رویدادهای زمانبندی شده
+  // Define the scheduled handler
   async scheduled(event, env, ctx) {
     try {
-      console.log("شروع پردازش زمانبندی شده فیدهای RSS");
+      console.log("Starting scheduled RSS feed processing");
       ctx.waitUntil(processFeeds(env));
     } catch (error) {
-      console.error(`خطا در رویداد زمانبندی شده: ${error.message}`);
+      console.error(`Error in scheduled event: ${error.message}`);
     }
   },
   
-  // متد fetch برای پاسخ به درخواست‌های HTTP
+  // Define the fetch handler for HTTP requests
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     
     if (url.pathname === "/manual-run") {
       ctx.waitUntil(processFeeds(env));
-      return new Response("پردازش در پس‌زمینه آغاز شد", {
+      return new Response("Processing started in the background", {
         status: 200,
         headers: { "Content-Type": "text/plain; charset=UTF-8" }
       });
@@ -2903,7 +2906,7 @@ export default {
       return new Response(JSON.stringify({
         status: "active",
         feeds: RSS_FEEDS.length,
-        version: "2.0.1", // Updated version
+        version: "2.0.1",
         lastUpdate: new Date().toISOString()
       }), {
         status: 200,
@@ -2911,165 +2914,10 @@ export default {
       });
     }
     
-    // Add new endpoint to clear duplicate content records
-    if (url.pathname === "/clear-duplicates") {
-      try {
-        if (env && env.POST_TRACKER) {
-          console.log("شروع پاکسازی رکوردهای تشخیص محتوای تکراری...");
-          const keys = await env.POST_TRACKER.list({ prefix: "exact_", limit: 1000 });
-          
-          if (keys && keys.keys && keys.keys.length > 0) {
-            console.log(`تعداد ${keys.keys.length} رکورد تشخیص محتوای تکراری یافت شد.`);
-            
-            let deleteCount = 0;
-            for (const key of keys.keys) {
-              await env.POST_TRACKER.delete(key.name);
-              deleteCount++;
-            }
-            
-            // Also clear title keys
-            const titleKeys = await env.POST_TRACKER.list({ prefix: "title_", limit: 1000 });
-            if (titleKeys && titleKeys.keys && titleKeys.keys.length > 0) {
-              console.log(`تعداد ${titleKeys.keys.length} رکورد عنوان تکراری یافت شد.`);
-              
-              for (const key of titleKeys.keys) {
-                await env.POST_TRACKER.delete(key.name);
-                deleteCount++;
-              }
-            }
-            
-            return new Response(JSON.stringify({
-              status: "success",
-              message: `${deleteCount} رکورد تشخیص محتوای تکراری با موفقیت حذف شدند.`
-            }), {
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            });
-          } else {
-            return new Response(JSON.stringify({
-              status: "info",
-              message: "هیچ رکورد تشخیص محتوای تکراری یافت نشد."
-            }), {
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            });
-          }
-        }
-      } catch (error) {
-        return new Response(JSON.stringify({
-          status: "error",
-          message: `خطا در پاکسازی رکوردهای تشخیص محتوای تکراری: ${error.message}`
-        }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-    }
-    
-    if (url.pathname === "/webhook") {
-      if (request.method === "POST") {
-        try {
-          const payload = await request.json();
-          console.log("Webhook received:", JSON.stringify(payload));
-          
-          // در اینجا می‌توانید پردازش پیام‌های دریافتی از تلگرام را انجام دهید
-          // برای مثال، اگر کاربری پیامی بفرستد، می‌توانید پاسخ مناسب را ارسال کنید
-          
-          if (payload.message && payload.message.text === "/start") {
-            // ارسال پیام خوش‌آمدگویی
-            const chatId = payload.message.chat.id;
-            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                chat_id: chatId,
-                text: "سلام! به ربات خبری رمز نیوز خوش آمدید. اخبار به طور خودکار در کانال @ramznewsofficial منتشر می‌شوند."
-              })
-            });
-          }
-          
-          return new Response("OK", { status: 200 });
-        } catch (error) {
-          console.error("Error processing webhook:", error);
-          return new Response("Bad Request", { status: 400 });
-        }
-      } else {
-        return new Response("Method Not Allowed", { status: 405 });
-      }
-    }
-    
-    if (url.pathname === "/set-webhook") {
-      // تنظیم وب هوک تلگرام (فقط برای ادمین‌ها)
-      const webhookUrl = `${url.protocol}//${url.hostname}/webhook`;
-      try {
-        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: webhookUrl })
-        });
-        
-        const result = await response.json();
-        return new Response(JSON.stringify(result), {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
-        });
-      } catch (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-    }
-    
-    if (url.pathname === "/clear-old") {
-      try {
-        if (env && env.POST_TRACKER) {
-          console.log("شروع پاکسازی پست‌های قدیمی...");
-          const keys = await env.POST_TRACKER.list({ limit: 1000 });
-          
-          if (keys && keys.keys && keys.keys.length > MAX_SAVED_MESSAGES) {
-            console.log(`تعداد ${keys.keys.length} پست ذخیره شده است. حداکثر مجاز: ${MAX_SAVED_MESSAGES}`);
-            const keysToDelete = keys.keys.slice(0, keys.keys.length - MAX_SAVED_MESSAGES);
-            console.log(`حذف ${keysToDelete.length} پست قدیمی...`);
-            
-            for (const key of keysToDelete) {
-              await env.POST_TRACKER.delete(key.name);
-            }
-            
-            return new Response(JSON.stringify({
-              status: "success",
-              message: `${keysToDelete.length} پست قدیمی با موفقیت حذف شدند.`
-            }), {
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            });
-          } else {
-            return new Response(JSON.stringify({
-              status: "info",
-              message: `تعداد پست‌های ذخیره شده (${keys.keys.length}) کمتر از حداکثر مجاز (${MAX_SAVED_MESSAGES}) است.`
-            }), {
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            });
-          }
-        }
-      } catch (error) {
-        return new Response(JSON.stringify({
-          status: "error",
-          message: `خطا در پاکسازی پست‌های قدیمی: ${error.message}`
-        }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-    }
-    
-    return new Response("سیستم مدیریت محتوای هوشمند رمز نیوز در حال اجراست", {
+    // Default response
+    return new Response("RSS to Telegram Bot is running", {
       status: 200,
       headers: { "Content-Type": "text/plain; charset=UTF-8" }
     });
-  },
-  
-  // اضافه کردن processFeeds برای دسترسی از خارج
-  processFeeds
+  }
 };
