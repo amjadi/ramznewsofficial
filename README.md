@@ -1,94 +1,111 @@
-# Ramz News Cloudflare Worker
+# ربات RSS به تلگرام
 
-A Cloudflare Worker that fetches content from various RSS feeds, processes and sanitizes the content, and posts it to a Telegram channel.
+ربات خودکار برای دریافت فیدهای RSS و ارسال پست‌های با کیفیت به کانال تلگرام. این ربات اخبار سیاسی، اقتصادی و رمزارزی را از منابع مختلف جمع‌آوری می‌کند و پس از فیلتر کردن، پست‌های مرتبط را به کانال تلگرام ارسال می‌کند.
 
-## Features
+## ویژگی‌ها
 
-- Automatically fetches content from multiple RSS feeds
-- Extracts full content from article pages
-- Cleans and sanitizes HTML content
-- Detects and prevents duplicate posts
-- Posts content to a Telegram channel
-- Runs on a scheduled basis via Cloudflare Workers
+- دریافت خودکار از چندین منبع RSS
+- فیلتر کردن محتوای تکراری و کم‌کیفیت
+- حذف محتوای نامرتبط با استفاده از الگوریتم‌های پیشرفته
+- اولویت‌بندی هوشمند اخبار فوری و مهم
+- استخراج خودکار هشتگ‌های مرتبط
+- ذخیره‌سازی پست‌های ارسال شده در KV Storage برای جلوگیری از ارسال مجدد
+- فرمت‌بندی زیبا برای پست‌های تلگرام
 
-## RSS Feeds
+## نصب و راه‌اندازی
 
-The worker currently fetches news from:
+### پیش‌نیازها
+
+- حساب Cloudflare
+- توکن ربات تلگرام
+- نام کاربری کانال تلگرام
+
+### دیپلوی
+
+روش‌های مختلف دیپلوی:
+
+1. **دیپلوی خودکار با Git (روش توصیه شده)**:
+   - پروژه را به یک مخزن GitHub یا GitLab پوش کنید
+   - پروژه را به Cloudflare Pages متصل کنید
+   - هر بار تغییرات را پوش کنید، به‌طور خودکار دیپلوی می‌شود
+   
+   برای جزئیات بیشتر به [DEPLOYMENT.md](./DEPLOYMENT.md) مراجعه کنید.
+
+2. **دیپلوی دستی با Wrangler CLI**:
+   ```bash
+   npm install -g wrangler
+   wrangler login
+   wrangler publish
+   ```
+
+## پیکربندی
+
+تنظیمات اصلی در فایل `src/index.js`:
+
+```javascript
+// Configuration
+const TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN";
+const CHANNEL_USERNAME = "@your_channel";
+const MAX_SAVED_MESSAGES = 1000;
+const DELAY_BETWEEN_POSTS = 10000; // milliseconds
+const STORAGE_TTL_DAYS = 60;
+```
+
+همچنین می‌توانید منابع RSS را در آرایه `RSS_FEEDS` تنظیم کنید.
+
+## تست
+
+برای تست ربات قبل از دیپلوی:
+
+```bash
+wrangler dev
+```
+
+یا برای اجرای یکباره:
+
+```bash
+node run-once.js
+```
+
+## نگهداری
+
+- لاگ‌ها و وضعیت اجرا را در داشبورد Cloudflare بررسی کنید
+- برای تست وضعیت ربات، به آدرس `https://your-worker.workers.dev/status` مراجعه کنید
+- برای اجرای دستی، به آدرس `https://your-worker.workers.dev/manual-run` مراجعه کنید
+
+## راهنمای عیب‌یابی
+
+موارد رایج خطا:
+- مشکل در دسترسی به API تلگرام
+- تنظیم نادرست KV Storage
+- مشکل در دسترسی به فیدهای RSS
+- خطاهای فرمت‌بندی محتوا
+
+برای اطلاعات بیشتر به [DEPLOYMENT.md](./DEPLOYMENT.md) مراجعه کنید.
+
+## News Sources
+
+The bot currently aggregates news from:
+
+### General News (High Priority)
 - BBC Persian
 - DW Persian
 - Euronews Persian
+
+### Crypto News (High Priority)
+- Ramzarz News
+- Arz Digital
+- Nobitex Mag
 - Crypto Asriran
+- And more...
+
+### Financial News (Medium Priority)
 - Tejarat News
-
-## Setup & Deployment
-
-### Prerequisites
-
-- [Node.js](https://nodejs.org/) (v14 or later)
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/)
-- Cloudflare account
-- Telegram Bot Token (obtained from BotFather)
-
-### Setup
-
-1. Clone this repository
-2. Install dependencies:
-   ```
-   npm install
-   ```
-
-3. Login to Cloudflare with Wrangler:
-   ```
-   npx wrangler login
-   ```
-
-4. Create a KV namespace for storing post tracking information:
-   ```
-   npx wrangler kv:namespace create "POST_TRACKER"
-   ```
-
-5. Update the `wrangler.toml` file with the KV namespace ID from the previous step.
-
-6. Optional: Create a preview KV namespace for development:
-   ```
-   npx wrangler kv:namespace create "POST_TRACKER" --preview
-   ```
-
-### Deployment
-
-To deploy the worker to Cloudflare:
-
-```
-npm run deploy
-```
-
-### Development
-
-To run the worker locally for development:
-
-```
-npm run dev
-```
-
-## API Endpoints
-
-The worker exposes several HTTP endpoints:
-
-- `/manual-run`: Manually trigger the RSS processing
-- `/status`: Check the worker status
-- `/clear-old`: Clear old post records from KV storage
-
-## Configuration
-
-Main configuration variables are at the top of `src/index.js`:
-
-- `TELEGRAM_BOT_TOKEN`: Your Telegram bot token
-- `CHANNEL_USERNAME`: Your Telegram channel username (e.g., @ramznewsofficial)
-- `MAX_SAVED_MESSAGES`: Maximum number of message IDs to store
-- `DELAY_BETWEEN_POSTS`: Delay between posting messages (in milliseconds)
-- `STORAGE_TTL_DAYS`: How long to keep message IDs in storage
-- `RSS_FEEDS`: Array of RSS feed URLs and their sources
 
 ## License
 
-MIT 
+MIT
+
+## Credits
+
+Built by Ramz News Team. 
