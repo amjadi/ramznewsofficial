@@ -1,13 +1,14 @@
-name = "ramznewsofficial"
+name = "rss-telegram-bot"
 main = "src/index.js"
-compatibility_date = "2023-11-01"
-nodejs_compat = true
-
-# Set up KV namespace for tracking posts
-kv_namespaces = [
-  { binding = "POST_TRACKER", id = "6275727dfdcf4de29088dba0313e6dcc" }
-]
+compatibility_date = "2024-01-01"
 
 [triggers]
 # Run every 30 minutes
 crons = ["*/30 * * * *"] 
+
+# Uncomment to use local KV in dev mode
+preview_id = "your-preview-kv-namespace-id-here"  # Replace with preview KV ID
+
+[[kv_namespaces]]
+binding = "POST_TRACKER"
+id = "your-kv-namespace-id-here"  # Replace with actual KV namespace ID

@@ -1,8 +1,9 @@
-name: Deploy to Cloudflare Workers
+name: Deploy RSS Telegram Bot
 
 on:
   push:
     branches:
+      - master
       - main
   workflow_dispatch:
 
@@ -19,16 +20,32 @@ jobs:
           node-version: '18'
       
       - name: Install dependencies
-        run: npm ci
+        run: npm ci || npm install
       
-      - name: Publish to Cloudflare
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          command: deploy --env production
+      - name: Install Wrangler
+        run: npm install -g wrangler
+      
+      - name: Setup KV namespace
+        run: |
+          if ! wrangler kv:namespace list | grep -q "POST_TRACKER"; then
+            echo "Creating KV namespace..."
+            wrangler kv:namespace create POST_TRACKER
+            # Extract the namespace ID and update wrangler.toml
+            KV_ID=$(wrangler kv:namespace list | grep POST_TRACKER | awk '{print $2}')
+            sed -i "s/id = \"your-kv-namespace-id-here\"/id = \"$KV_ID\"/" wrangler.toml
+          else
+            echo "KV namespace already exists."
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      
+      - name: Publish to Cloudflare Workers
+        run: wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       
       - name: Verify Deployment
         run: |
-          echo "Deployment completed!"
-          echo "You can check the worker at: https://ramznews-worker.<your-subdomain>.workers.dev/status" 
+          echo "Deployment completed. Verifying..."
+          # Add verification steps if needed 
