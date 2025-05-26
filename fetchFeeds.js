@@ -75,6 +75,9 @@ async function processFeed(feedUrl, env) {
     } else if (text.includes('<feed')) {
       // Atom feed
       items = extractAtomItemsWithRegex(text, feedUrl);
+    } else if (text.includes('<rdf:RDF')) {
+      // RDF feed (DW)
+      items = extractRdfItemsWithRegex(text, feedUrl);
     } else {
       throw new Error('Unknown feed format');
     }
@@ -190,6 +193,53 @@ function extractAtomItemsWithRegex(text, feedUrl) {
 }
 
 /**
+ * Extract RDF feed items using regex
+ */
+function extractRdfItemsWithRegex(text, feedUrl) {
+  try {
+    // Extract source/title
+    const sourceMatch = text.match(/<title>(.*?)<\/title>/);
+    const source = sourceMatch ? sourceMatch[1] : new URL(feedUrl).hostname;
+    // Extract all items
+    const itemRegex = /<item[\s\S]*?<\/item>/g;
+    const itemMatches = text.match(itemRegex) || [];
+    return itemMatches.map(itemText => {
+      const titleMatch = itemText.match(/<title>([\s\S]*?)<\/title>/);
+      const linkMatch = itemText.match(/<link>([\s\S]*?)<\/link>/);
+      const descMatch = itemText.match(/<description>([\s\S]*?)<\/description>/);
+      const dateMatch = itemText.match(/<dc:date>([\s\S]*?)<\/dc:date>/);
+      const subjectMatch = itemText.match(/<dc:subject>([\s\S]*?)<\/dc:subject>/);
+      const langMatch = itemText.match(/<dc:language>([\s\S]*?)<\/dc:language>/);
+      const idMatch = itemText.match(/<dwsyn:contentID>([\s\S]*?)<\/dwsyn:contentID>/);
+      const title = titleMatch ? titleMatch[1].trim() : '';
+      const link = linkMatch ? linkMatch[1].trim() : '';
+      const description = descMatch ? sanitizeHtml(descMatch[1]) : '';
+      const pubDate = dateMatch ? dateMatch[1].trim() : '';
+      const category = subjectMatch ? subjectMatch[1].trim() : '';
+      const language = langMatch ? langMatch[1].trim() : '';
+      const id = idMatch ? idMatch[1].trim() : generatePostIdentifier(title, link);
+      // فقط اگر موضوع سیاست یا ایران بود نگه دار
+      if (category !== 'سیاست' && category !== 'ایران') return null;
+      return {
+        id,
+        title,
+        link,
+        description,
+        pubDate,
+        category,
+        language,
+        source,
+        timestamp: new Date().toISOString(),
+        feedType: 'rdf'
+      };
+    }).filter(item => item !== null);
+  } catch (error) {
+    console.error('Error extracting RDF items with regex:', error);
+    return [];
+  }
+}
+
+/**
  * Filter out items that have already been processed
  */
 async function filterNewItems(items, env) {
@@ -252,8 +302,14 @@ function processFeedItem(item, feedSource) {
       link: item.link,
       description: cleanText(item.description || item.summary || item.content),
       pubDate: item.pubDate || item.published || item.date || new Date().toISOString(),
-      source: feedSource
+      source: feedSource,
+      category: item.category || ''
     };
+    // فقط اگر موضوع سیاست یا ایران بود نگه دار
+    if (processedItem.category && processedItem.category !== 'سیاست' && processedItem.category !== 'ایران') {
+      console.log(`Skipping item with non-political/economic category: ${processedItem.id}`);
+      return null;
+    }
     
     // Skip items without essential data
     if (!processedItem.title || !processedItem.description) {

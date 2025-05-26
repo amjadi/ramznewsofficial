@@ -25,7 +25,7 @@ export const CONFIG = {
   // منابع RSS
   RSS_FEEDS: [
     // منابع خبری
-    "https://www.bbc.com/persian/iran/rss.xml",
+    "https://feeds.bbci.co.uk/persian/rss.xml",
     "https://rss.dw.com/rdf/rss-per-iran",
     "https://per.euronews.com/rss",
     // منابع رمزارز
