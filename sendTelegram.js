@@ -110,6 +110,11 @@ function validatePostBeforeSending(post) {
   const hasBulletPoints = text.includes('•') || text.includes('-') || text.includes('*');
   console.log('Has bullet points:', hasBulletPoints);
   
+  if (!hasBulletPoints) {
+    console.error('Post missing bullet points');
+    return false;
+  }
+  
   // Check for hashtags (relaxed)
   const hasHashtags = text.includes('#');
   console.log('Has hashtags:', hasHashtags);
@@ -151,7 +156,10 @@ function validatePostBeforeSending(post) {
                             text.includes('…'); // Other incomplete markers
   
   // Check for cut-off HTML tags
-  const hasUnbalancedHtmlTags = (text.match(/<[^>]+>/g) || []).length % 2 !== 0;
+  const htmlTags = text.match(/<[^>]+>/g) || [];
+  const openingTags = htmlTags.filter(tag => !tag.includes('/'));
+  const closingTags = htmlTags.filter(tag => tag.includes('/'));
+  const hasUnbalancedHtmlTags = openingTags.length !== closingTags.length;
   
   // Check for abruptly ending sentences (no punctuation at the end of last line)
   const lastParagraph = text.split('\n\n').pop() || '';
@@ -181,6 +189,22 @@ function validatePostBeforeSending(post) {
                       text.includes('www.');
   console.log('Has promotion:', hasPromotion);
   
+  // Check if text is too short to be a complete post
+  const isTooShort = text.length < 150;
+  console.log('Is too short:', isTooShort);
+  
+  // FINAL VALIDATION RESULT
+  const isValid = hasSignature && !hasPromotion && !isIncomplete && !isTooShort;
+  
+  if (!isValid) {
+    console.error('Post validation failed. Issues detected:', {
+      missingSignature: !hasSignature,
+      hasPromotion,
+      isIncomplete,
+      isTooShort
+    });
+  }
+  
   // More relaxed validation for test purposes
   if (post.source === 'تست خبر رمزارز') {
     console.log('Test post detected, relaxing validation');
@@ -188,7 +212,7 @@ function validatePostBeforeSending(post) {
   }
   
   // For real posts, ensure they have at least basic formatting and are complete
-  return hasSignature && !hasPromotion && !isIncomplete;
+  return isValid;
 }
 
 /**

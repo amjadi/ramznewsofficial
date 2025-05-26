@@ -117,21 +117,40 @@ export default {
         
         console.log(`Processing ${pendingItems.length} pending items`);
         
+        let successCount = 0;
+        let failureCount = 0;
+        
         for (const item of pendingItems) {
           try {
             // Step 2: Format with AI
             console.log(`Formatting item: ${item.id}`);
             const formattedPost = await formatWithAI(item, env);
             
-            // Step 3: Send to Telegram
-            if (formattedPost) {
-              console.log(`Sending item to Telegram: ${item.id}`);
-              await sendToTelegram(formattedPost, env);
+            // Step 3: Validate post quality before sending
+            if (!formattedPost || !formattedPost.telegram_text) {
+              console.error(`Invalid formatted post for item: ${item.id}, skipping`);
+              failureCount++;
+              continue;
+            }
+            
+            // Step 4: Send to Telegram
+            console.log(`Sending item to Telegram: ${item.id}`);
+            const sendResult = await sendToTelegram(formattedPost, env);
+            
+            if (sendResult.success) {
+              successCount++;
+              console.log(`Successfully sent item: ${item.id}, message ID: ${sendResult.message_id}`);
+            } else {
+              failureCount++;
+              console.error(`Failed to send item: ${item.id}, reason: ${sendResult.reason}`);
             }
           } catch (itemError) {
+            failureCount++;
             console.error(`Error processing item: ${JSON.stringify(item)}`, itemError);
           }
         }
+        
+        console.log(`Processing complete. Success: ${successCount}, Failures: ${failureCount}`);
       }
       
       return new Response('Scheduled task completed');

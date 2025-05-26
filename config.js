@@ -54,7 +54,10 @@ export const CONFIG = {
     BATCH_SIZE: 5,
     
     // فعال بودن حالت دیباگ
-    DEBUG_MODE: false
+    DEBUG_MODE: false,
+    
+    // استفاده از پست پشتیبان در صورت خطا در تولید محتوا
+    USE_BACKUP_ON_FAILURE: false
   },
   
   // پرامپت پیش‌فرض برای هوش مصنوعی

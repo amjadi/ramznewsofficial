@@ -140,60 +140,92 @@ async function processWithLLM(item, env) {
     // Log the formatted content for debugging
     console.log('AI formatted content:', formattedContent);
     
-    if (!validatePostContent(formattedContent)) {
-      // If validation fails, try a more direct approach with a simplified format
-      console.warn('Post validation failed, attempting simplified format generation');
+    // First attempt validation
+    let isValid = validatePostContent(formattedContent);
+    
+    // If first attempt failed, try up to 2 more times with stronger instructions
+    let retryCount = 0;
+    let finalContent = formattedContent;
+    
+    while (!isValid && retryCount < 3) {
+      console.warn(`Post validation failed (attempt ${retryCount + 1}), trying again with stronger instructions`);
       
-      // Try one more time with a more explicit instruction if the first attempt failed
-      if (content.includes('[...') || content.includes('The post') || content.trim().endsWith('...')) {
-        console.warn('Content appears incomplete, trying again with stronger instructions');
-        
-        // Make a second attempt with more explicit instructions
-        const retryResponse = await fetch(apiUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-            'HTTP-Referer': 'https://ramznews.telegram.bot'
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [
-              {
-                role: 'system',
-                content: 'خلاصه‌ای کامل و جامع از این خبر بنویس. هرگز خلاصه‌ات را ناقص رها نکن. از کلمات "[...]" یا "..." در انتهای متن استفاده نکن. متن باید با عنوان پررنگ (<b>عنوان</b>) شروع شود، سپس چند نکته مهم با علامت بولت (•) بیاید، و در انتها چند هشتگ مرتبط و امضای @ramznewsofficial داشته باشد.'
-              },
-              {
-                role: 'user',
-                content: `لطفاً خلاصه کاملی از این خبر ارائه کن:\n\nعنوان: ${title}\n\nمتن خبر: ${description}`
-              }
-            ],
-            temperature: 0.3, // Lower temperature for more predictable output
-            max_tokens: maxTokens
-          })
-        });
-        
-        if (retryResponse.ok) {
-          const retryResult = await retryResponse.json();
-          const retryContent = retryResult.choices[0]?.message?.content;
-          
-          if (retryContent) {
-            const retryFormatted = cleanupFormattedText(retryContent);
-            if (validatePostContent(retryFormatted)) {
-              return retryFormatted;
+      const retryResponse = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': 'https://ramznews.telegram.bot'
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            {
+              role: 'system',
+              content: `تو متخصص خلاصه‌سازی و فرمت‌دهی حرفه‌ای اخبار به قالب پست‌های تلگرامی هستی. اخبار را به شکل پست تلگرامی کامل در می‌آوری.
+بسیار مهم: هرگز پست ناقص تولید نکن. هرگز از عبارات "..." یا "[...]" یا "[…]" در انتها استفاده نکن.
+هر پست باید دقیقاً شامل این موارد باشد:
+۱. یک ایموجی مرتبط در ابتدا
+۲. عنوان با تگ <b>عنوان</b>
+۳. چند نکته مهم با علامت بولت (•)
+۴. چند هشتگ مرتبط به فارسی
+۵. امضای کانال: @ramznewsofficial | اخبار رمزی
+پست باید کاملاً تمیز و بدون لینک، نام سایت، یا هرگونه تبلیغ باشد.`
+            },
+            {
+              role: 'user',
+              content: `لطفاً این خبر را به شکل یک پست تلگرامی کامل و بدون هیچ مطلب ناقص دربیاور. متن کامل باشد و با "..." یا عبارت ناتمام پایان نیابد:
+
+عنوان: ${title}
+
+متن خبر: ${description}`
             }
+          ],
+          temperature: 0.2, // Lower temperature for more predictable output
+          max_tokens: maxTokens
+        })
+      });
+      
+      if (retryResponse.ok) {
+        const retryResult = await retryResponse.json();
+        const retryContent = retryResult.choices[0]?.message?.content;
+        
+        if (retryContent) {
+          finalContent = cleanupFormattedText(retryContent);
+          isValid = validatePostContent(finalContent);
+          
+          if (isValid) {
+            console.log('Successfully generated valid content on retry');
+            break;
           }
         }
       }
       
-      return createBackupPost(title, description);
+      retryCount++;
     }
     
-    return formattedContent;
+    // If we still couldn't generate valid content, create a backup post or throw an error
+    if (!isValid) {
+      console.error('Failed to generate valid content after multiple attempts');
+      
+      // Either create a backup post or reject the item
+      if (CONFIG.PROCESSING.USE_BACKUP_ON_FAILURE) {
+        return createBackupPost(title, description);
+      } else {
+        throw new Error('Failed to generate valid content after multiple attempts');
+      }
+    }
+    
+    return finalContent;
   } catch (error) {
     console.error('Error processing with LLM:', error);
-    // Create a backup post in case of API failure
-    return createBackupPost(item.title, item.description);
+    
+    // Only create a backup post if the config allows it
+    if (CONFIG.PROCESSING.USE_BACKUP_ON_FAILURE) {
+      return createBackupPost(item.title, item.description);
+    } else {
+      throw new Error(`AI processing failed: ${error.message}`);
+    }
   }
 }
 
@@ -201,17 +233,15 @@ async function processWithLLM(item, env) {
  * Validate if the post content meets all requirements
  */
 function validatePostContent(content) {
-  // Check if content is too short
-  if (content.length < 50) return false;
+  // Detailed validation for post structure and completeness
   
-  // Check for required components
+  // Required components
   const hasTitle = content.includes('<b>') && content.includes('</b>');
   const hasBulletPoints = content.includes('•');
   const hasSignature = content.includes('@ramznewsofficial');
   const hasHashtags = content.includes('#');
   
-  // Enhanced check for incomplete content
-  // Check for sentences ending with "...", ellipsis, or no punctuation at the end
+  // Content completeness checks
   const lastParagraph = content.split('\n\n').pop() || '';
   const endsWithIncomplete = content.trim().endsWith('...') || 
                              content.includes('[...]') ||
@@ -222,25 +252,46 @@ function validatePostContent(content) {
                              content.includes('ادامه مطلب') ||
                              (lastParagraph.trim().match(/[^\.\?!]$/) && !lastParagraph.includes('@ramznewsofficial'));
   
-  // Check for cut-off HTML tags
-  const hasUnbalancedHtmlTags = (content.match(/<[^>]+>/g) || []).length % 2 !== 0;
+  // HTML tag balance check
+  const htmlTags = content.match(/<[^>]+>/g) || [];
+  const openingTags = htmlTags.filter(tag => !tag.includes('/'));
+  const closingTags = htmlTags.filter(tag => tag.includes('/'));
+  const hasUnbalancedHtmlTags = openingTags.length !== closingTags.length;
   
-  // Check for WordPress artifacts which indicate incomplete content
+  // WordPress artifacts check
   const hasWordPressArtifacts = content.includes('The post') || 
                                content.includes('Read more') ||
                                content.includes('wp-');
   
-  // Flag for incomplete content
+  // Incomplete content flag
   const isIncomplete = endsWithIncomplete || hasUnbalancedHtmlTags || hasWordPressArtifacts;
   
-  // Check for promotional content
+  // Promotional content check
   const hasPromotion = content.includes('یورونیوز') || 
                       content.includes('بی‌بی‌سی') || 
                       content.includes('مشاهده بیشتر') ||
                       content.includes('http') ||
                       content.includes('www.');
   
-  return hasTitle && hasBulletPoints && hasSignature && hasHashtags && !isIncomplete && !hasPromotion;
+  // Length check (minimum content length)
+  const isTooShort = content.length < 150;
+  
+  // Log validation results for debugging
+  console.log('Validation results:', {
+    hasTitle,
+    hasBulletPoints,
+    hasSignature,
+    hasHashtags,
+    endsWithIncomplete,
+    hasUnbalancedHtmlTags,
+    hasWordPressArtifacts,
+    isIncomplete,
+    hasPromotion,
+    isTooShort,
+    contentLength: content.length
+  });
+  
+  return hasTitle && hasBulletPoints && hasSignature && hasHashtags && !isIncomplete && !hasPromotion && !isTooShort;
 }
 
 /**
