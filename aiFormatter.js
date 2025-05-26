@@ -20,17 +20,58 @@ export async function formatWithAI(item, env) {
     console.log(`Formatting item: ${item.title}`);
     
     // Process with LLM to get formatted text
-    const formattedText = await processWithLLM(item, env);
+    let formattedText = await processWithLLM(item, env);
     
     // Extract image URL from the original article
     const imageUrl = await extractImageUrl(item.link);
     
-    // Create the final formatted post
+    // --- تضمین ساختار و اصلاح خودکار پست ---
+    // استخراج ایموجی و هشتگ با هوش مصنوعی و الگوریتم کمکی
+    const { emoji, suggestedHashtags } = categorizeContent(item.title, item.description);
+    // حذف هشتگ‌های عمومی بی‌ارزش
+    let filteredHashtags = suggestedHashtags.filter(tag => !['#خبر', '#تازه', '#گزارش'].includes(tag));
+    // اگر هیچ هشتگ موضوعی نبود، فقط یکی از عمومی‌ها را اضافه کن
+    if (filteredHashtags.length === 0) filteredHashtags = ['#خبر'];
+    // محدود به ۵ عدد و حذف تکراری‌ها
+    const hashtags = [...new Set(filteredHashtags)].slice(0, 5);
+    // حذف همه ایموجی‌های ابتدای متن (اگر وجود دارد)
+    let formatted = formattedText.trim().replace(/^([\uD800-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]|[\u1F300-\u1F6FF]|[\u1F900-\u1F9FF]|[\u1FA70-\u1FAFF]|[\u200d\u2640-\u2642\u2600-\u2B55\u23cf\u23e9-\u23f3\u23f8-\u23fa])+\s*/, '');
+    // فقط یک ایموجی مرتبط در ابتدای متن قرار بده
+    formatted = `${emoji} ${formatted}`;
+    // اگر هشتگ در متن نبود، اضافه کن
+    if (!formatted.includes('#')) {
+      formatted += '\n\n' + hashtags.join(' ');
+    }
+    // اگر بولت نبود، خطوط را بولت‌دار کن
+    const lines = formatted.split('\n');
+    let hasBullet = lines.some(line => line.trim().startsWith('•'));
+    if (!hasBullet) {
+      formatted = lines.map((line, i) => {
+        if (i === 0) return line; // عنوان
+        if (line.trim().length > 0 && !line.trim().startsWith('#') && !line.includes('@ramznewsofficial')) {
+          return '• ' + line.trim();
+        }
+        return line;
+      }).join('\n');
+    }
+    // اگر امضا نبود، اضافه کن
+    if (!formatted.includes('@ramznewsofficial')) {
+      formatted += '\n@ramznewsofficial | اخبار رمزی';
+    }
+    // استخراج summary (خلاصه ۳-۵ خطی)
+    let summary = '';
+    if (item.description) {
+      const sentences = item.description.replace(/<[^>]+>/g, '').split(/[.!؟\n]/).map(s => s.trim()).filter(s => s.length > 20);
+      summary = sentences.slice(0, 3).join('. ') + (sentences.length > 0 ? '.' : '');
+    }
+    // خروجی کامل و استاندارد
     const post = {
       id: item.id,
       title: item.title,
-      telegram_text: formattedText,
+      telegram_text: formatted.trim(),
       image_url: imageUrl,
+      hashtags,
+      summary,
       source: item.source,
       original_link: item.link,
       processed_at: new Date().toISOString()
@@ -40,7 +81,29 @@ export async function formatWithAI(item, env) {
     return post;
   } catch (error) {
     console.error(`Error formatting item ${item.id}:`, error);
-    throw error;
+    // اگر پست قابل اصلاح بود، پست پشتیبان بساز
+    if (CONFIG.PROCESSING.USE_BACKUP_ON_FAILURE) {
+      const backupText = createBackupPost(item.title, item.description);
+      const { emoji, suggestedHashtags } = categorizeContent(item.title, item.description);
+      let summary = '';
+      if (item.description) {
+        const sentences = item.description.replace(/<[^>]+>/g, '').split(/[.!؟\n]/).map(s => s.trim()).filter(s => s.length > 20);
+        summary = sentences.slice(0, 3).join('. ') + (sentences.length > 0 ? '.' : '');
+      }
+      return {
+        id: item.id,
+        title: item.title,
+        telegram_text: backupText.trim(),
+        image_url: null,
+        hashtags: suggestedHashtags,
+        summary,
+        source: item.source,
+        original_link: item.link,
+        processed_at: new Date().toISOString()
+      };
+    } else {
+      throw error;
+    }
   }
 }
 

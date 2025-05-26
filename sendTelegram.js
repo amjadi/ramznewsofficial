@@ -82,137 +82,69 @@ function validatePostBeforeSending(post) {
     console.error('Post text too short or missing');
     return false;
   }
-  
   // Log the post for debugging
   console.log('Validating post:', post.id);
   console.log('Post content:', post.telegram_text);
-  
-  // Check if post appears to be complete
-  const text = post.telegram_text;
-  
+  let text = post.telegram_text;
+  // استخراج ایموجی و هشتگ با هوش مصنوعی و الگوریتم کمکی
+  const { emoji, suggestedHashtags } = require('./shared/category.js').categorizeContent(post.title || '', post.description || '');
+  // اگر هشتگ نبود، اضافه کن
+  if (!text.includes('#')) {
+    text += '\n\n' + suggestedHashtags.map(tag => `#${tag}`).join(' ');
+  }
+  // اگر ایموجی در ابتدای متن نبود، اضافه کن
+  if (!text.trim().startsWith(emoji)) {
+    text = `${emoji} ` + text.trim();
+  }
+  // اگر بولت نبود، خطوط را بولت‌دار کن
+  const lines = text.split('\n');
+  let hasBullet = lines.some(line => line.trim().startsWith('•'));
+  if (!hasBullet) {
+    text = lines.map((line, i) => {
+      if (i === 0) return line; // عنوان
+      if (line.trim().length > 0 && !line.trim().startsWith('#') && !line.includes('@ramznewsofficial')) {
+        return '• ' + line.trim();
+      }
+      return line;
+    }).join('\n');
+  }
+  // اگر امضا نبود، اضافه کن
+  if (!text.includes('@ramznewsofficial')) {
+    text += '\n@ramznewsofficial | اخبار رمزی';
+  }
+  // اگر summary نبود، بساز
+  if (!post.summary && post.description) {
+    const sentences = post.description.replace(/<[^>]+>/g, '').split(/[.!؟\n]/).map(s => s.trim()).filter(s => s.length > 20);
+    post.summary = sentences.slice(0, 3).join('. ') + (sentences.length > 0 ? '.' : '');
+  }
+  post.telegram_text = text.trim();
+  // ادامه validation اصلی
   // Must have bold title (relaxed check)
   const hasBoldTitle = text.includes('<b>') && text.includes('</b>');
-  console.log('Has bold title:', hasBoldTitle);
   if (!hasBoldTitle) {
-    // If no HTML formatting found, automatically add bold formatting to the first line
     if (post.title) {
       const firstLine = post.title.trim();
       post.telegram_text = `<b>${firstLine}</b>\n\n${post.telegram_text}`;
-      console.log('Added bold formatting to title');
-      console.log('Updated content:', post.telegram_text);
     } else {
-      console.error('Post missing bold title formatting and no title to format');
       return false;
     }
   }
-  
-  // Check for bullet points (relaxed)
   const hasBulletPoints = text.includes('•') || text.includes('-') || text.includes('*');
-  console.log('Has bullet points:', hasBulletPoints);
-  
-  if (!hasBulletPoints) {
-    console.error('Post missing bullet points');
-    return false;
-  }
-  
-  // Check for hashtags (relaxed)
   const hasHashtags = text.includes('#');
-  console.log('Has hashtags:', hasHashtags);
-  
-  // If missing hashtags, automatically add some based on title
-  if (!hasHashtags && post.title) {
-    // Extract keywords from title
-    const keywords = post.title.split(' ')
-      .filter(word => word.length > 3)
-      .slice(0, 3)
-      .map(word => `#${word.replace(/[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w]/g, '')}`);
-    
-    // Add hashtags to the post
-    if (keywords.length > 0) {
-      post.telegram_text += `\n\n${keywords.join(' ')}`;
-      console.log('Added hashtags based on title');
-      console.log('Updated content:', post.telegram_text);
-    }
-  }
-  
-  // Check for signature
   const hasSignature = text.includes('@ramznewsofficial');
-  console.log('Has signature:', hasSignature);
-  
-  // Add signature if missing
-  if (!hasSignature) {
-    post.telegram_text += '\n@ramznewsofficial | اخبار رمزی';
-    console.log('Added missing signature');
-    console.log('Updated content:', post.telegram_text);
-  }
-  
-  // *** ENHANCED CHECKS FOR INCOMPLETE CONTENT ***
-  
-  // Check for incomplete content using various patterns
-  const endsWithIncomplete = text.endsWith('...') || 
-                            text.includes('[...]') ||
-                            text.includes('The post') ||
-                            text.includes('Post ') ||
-                            text.includes('…'); // Other incomplete markers
-  
-  // Check for cut-off HTML tags
+  const endsWithIncomplete = text.endsWith('...') || text.includes('[...]') || text.includes('The post') || text.includes('Post ') || text.includes('…');
   const htmlTags = text.match(/<[^>]+>/g) || [];
   const openingTags = htmlTags.filter(tag => !tag.includes('/'));
   const closingTags = htmlTags.filter(tag => tag.includes('/'));
   const hasUnbalancedHtmlTags = openingTags.length !== closingTags.length;
-  
-  // Check for abruptly ending sentences (no punctuation at the end of last line)
   const lastParagraph = text.split('\n\n').pop() || '';
-  const endsAbruptly = lastParagraph.trim().match(/[^\.\?!]$/) && 
-                      !lastParagraph.includes('@ramznewsofficial');
-
-  // Check for WordPress artifacts which indicate incomplete content
-  const hasWordPressArtifacts = text.includes('The post') || 
-                              text.includes('[…]') || 
-                              text.includes('Read more') ||
-                              text.includes('ادامه مطلب') ||
-                              text.includes('wp-');
-  
-  console.log('Ends with incomplete:', endsWithIncomplete);
-  console.log('Has unbalanced HTML tags:', hasUnbalancedHtmlTags);
-  console.log('Ends abruptly:', endsAbruptly);
-  console.log('Has WordPress artifacts:', hasWordPressArtifacts);
-  
+  const endsAbruptly = lastParagraph.trim().match(/[^-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\w\s]/) && !lastParagraph.includes('@ramznewsofficial');
+  const hasWordPressArtifacts = text.includes('The post') || text.includes('[…]') || text.includes('Read more') || text.includes('ادامه مطلب') || text.includes('wp-');
   const isIncomplete = endsWithIncomplete || hasUnbalancedHtmlTags || endsAbruptly || hasWordPressArtifacts;
-  
-  // Check for promotional content
-  const hasPromotion = text.includes('یورونیوز') || 
-                      text.includes('بی‌بی‌سی') || 
-                      text.includes('مشاهده بیشتر') ||
-                      text.includes('http://') || 
-                      text.includes('https://') ||
-                      text.includes('www.');
-  console.log('Has promotion:', hasPromotion);
-  
-  // Check if text is too short to be a complete post
+  const hasPromotion = text.includes('یورونیوز') || text.includes('بی‌بی‌سی') || text.includes('مشاهده بیشتر') || text.includes('http://') || text.includes('https://') || text.includes('www.');
   const isTooShort = text.length < 150;
-  console.log('Is too short:', isTooShort);
-  
-  // FINAL VALIDATION RESULT
-  const isValid = hasSignature && !hasPromotion && !isIncomplete && !isTooShort;
-  
-  if (!isValid) {
-    console.error('Post validation failed. Issues detected:', {
-      missingSignature: !hasSignature,
-      hasPromotion,
-      isIncomplete,
-      isTooShort
-    });
-  }
-  
-  // More relaxed validation for test purposes
-  if (post.source === 'تست خبر رمزارز') {
-    console.log('Test post detected, relaxing validation');
-    return true;
-  }
-  
-  // For real posts, ensure they have at least basic formatting and are complete
-  return isValid;
+  // فقط اگر واقعاً غیرقابل اصلاح بود، ارسال نشود
+  return hasSignature && !hasPromotion && !isIncomplete && !isTooShort;
 }
 
 /**
