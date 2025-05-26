@@ -1,0 +1,24 @@
+{
+  "name": "ramznews-gen2",
+  "version": "1.0.0",
+  "description": "RamzNews Gen 2 - Intelligent RSS to Telegram News Publisher",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "publish": "wrangler publish",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "prettier --write '**/*.{js,json}'"
+  },
+  "author": "RamzNews Team",
+  "license": "MIT",
+  "devDependencies": {
+    "prettier": "^2.8.8",
+    "vitest": "^0.32.0",
+    "wrangler": "^3.0.0"
+  },
+  "dependencies": {
+    "html-entities": "^2.3.6"
+  }
+} 

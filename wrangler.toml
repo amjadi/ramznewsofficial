@@ -1,0 +1,23 @@
+name = "ramznews-gen2"
+main = "index.js"
+compatibility_date = "2023-01-01"
+usage_model = "bundled"
+workers_dev = true
+
+# KV Namespace for storing feed data and tracking sent posts
+[[kv_namespaces]]
+binding = "POST_TRACKER"
+id = "69f0b04ed7cd43028f6586a747ced6f1" # شناسه KV namespace
+
+# Optional D1 Database for analytics and more detailed tracking
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "ramznews-db"
+# database_id = "your-d1-database-id" # Replace with your actual D1 database ID
+
+# Cron Triggers
+[triggers]
+crons = ["*/10 * * * *", "* * * * *"] # Every 10 minutes for feed fetching, every minute for processing and sending
+
+# Note: Environment variables have been removed.
+# All configuration is now stored in config.js file. 
