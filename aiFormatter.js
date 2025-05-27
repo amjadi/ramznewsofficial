@@ -11,6 +11,7 @@
 
 import { categorizeContent } from './shared/category.js';
 import { CONFIG } from './config.js';
+import { extractHashtags } from './shared/hashtags.js';
 
 /**
  * Format a news item with AI for Telegram posting
@@ -25,53 +26,21 @@ export async function formatWithAI(item, env) {
     // Extract image URL from the original article
     const imageUrl = await extractImageUrl(item.link);
     
-    // --- تضمین ساختار و اصلاح خودکار پست ---
-    // استخراج ایموجی و هشتگ با هوش مصنوعی و الگوریتم کمکی
-    const { emoji, suggestedHashtags } = categorizeContent(item.title, item.description);
-    // حذف هشتگ‌های عمومی بی‌ارزش
-    let filteredHashtags = suggestedHashtags.filter(tag => !['#خبر', '#تازه', '#گزارش'].includes(tag));
-    // اگر هیچ هشتگ موضوعی نبود، فقط یکی از عمومی‌ها را اضافه کن
-    if (filteredHashtags.length === 0) filteredHashtags = ['#خبر'];
-    // محدود به ۵ عدد و حذف تکراری‌ها
-    const hashtags = [...new Set(filteredHashtags)].slice(0, 5);
-    // حذف همه ایموجی‌های ابتدای متن (اگر وجود دارد)
-    let formatted = formattedText.trim().replace(/^([\uD800-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]|[\u1F300-\u1F6FF]|[\u1F900-\u1F9FF]|[\u1FA70-\u1FAFF]|[\u200d\u2640-\u2642\u2600-\u2B55\u23cf\u23e9-\u23f3\u23f8-\u23fa])+\s*/, '');
-    // فقط یک ایموجی مرتبط در ابتدای متن قرار بده
-    formatted = `${emoji} ${formatted}`;
-    // اگر هشتگ در متن نبود، اضافه کن
-    if (!formatted.includes('#')) {
-      formatted += '\n\n' + hashtags.join(' ');
-    }
-    // اگر بولت نبود، خطوط را بولت‌دار کن
-    const lines = formatted.split('\n');
-    let hasBullet = lines.some(line => line.trim().startsWith('•'));
-    if (!hasBullet) {
-      formatted = lines.map((line, i) => {
-        if (i === 0) return line; // عنوان
-        if (line.trim().length > 0 && !line.trim().startsWith('#') && !line.includes('@ramznewsofficial')) {
-          return '• ' + line.trim();
-        }
-        return line;
-      }).join('\n');
-    }
-    // اگر امضا نبود، اضافه کن
-    if (!formatted.includes('@ramznewsofficial')) {
-      formatted += '\n@ramznewsofficial | اخبار رمزی';
-    }
-    // استخراج summary (خلاصه ۳-۵ خطی)
-    let summary = '';
-    if (item.description) {
-      const sentences = item.description.replace(/<[^>]+>/g, '').split(/[.!؟\n]/).map(s => s.trim()).filter(s => s.length > 20);
-      summary = sentences.slice(0, 3).join('. ') + (sentences.length > 0 ? '.' : '');
-    }
+    // بعد از ساخت متن پست:
+    const hashtags = extractHashtags({
+      title: item.title,
+      description: item.description,
+      source: item.source
+    });
+    
     // خروجی کامل و استاندارد
     const post = {
       id: item.id,
       title: item.title,
-      telegram_text: formatted.trim(),
+      telegram_text: formattedText.trim(),
       image_url: imageUrl,
       hashtags,
-      summary,
+      summary: '',
       source: item.source,
       original_link: item.link,
       processed_at: new Date().toISOString()
@@ -84,19 +53,13 @@ export async function formatWithAI(item, env) {
     // اگر پست قابل اصلاح بود، پست پشتیبان بساز
     if (CONFIG.PROCESSING.USE_BACKUP_ON_FAILURE) {
       const backupText = createBackupPost(item.title, item.description);
-      const { emoji, suggestedHashtags } = categorizeContent(item.title, item.description);
-      let summary = '';
-      if (item.description) {
-        const sentences = item.description.replace(/<[^>]+>/g, '').split(/[.!؟\n]/).map(s => s.trim()).filter(s => s.length > 20);
-        summary = sentences.slice(0, 3).join('. ') + (sentences.length > 0 ? '.' : '');
-      }
       return {
         id: item.id,
         title: item.title,
         telegram_text: backupText.trim(),
         image_url: null,
-        hashtags: suggestedHashtags,
-        summary,
+        hashtags: [],
+        summary: '',
         source: item.source,
         original_link: item.link,
         processed_at: new Date().toISOString()
@@ -372,23 +335,19 @@ function createBackupPost(title, description) {
       summary = summary.substring(0, 300) + '...';
     }
   }
-  
   // Remove any WordPress artifacts or HTML from the summary
   summary = summary.replace(/\[\s*…\s*\]|\[\s*\.\.\.\s*\]|The post\b.*$/g, '');
   summary = summary.replace(/<[^>]+>/g, '');
   summary = summary.replace(/https?:\/\/\S+|www\.\S+/g, '');
-  
   // Extract key points - try to break into sentences
   const sentences = summary.split(/\.|\?|\!/).filter(s => s.trim().length > 20).slice(0, 3);
   const bulletPoints = sentences.map(s => `• ${s.trim()}`).join('\n');
-  
-  // Get hashtags based on content
-  const { suggestedHashtags } = categorizeContent(title, description);
-  const hashtagString = suggestedHashtags.join(' ');
-  
-  // Get an appropriate emoji
-  const { emoji } = categorizeContent(title, description);
-  
+  // Get hashtags based on content (فقط منطق جدید)
+  const hashtagsArr = require('./shared/hashtags.js').extractHashtags({ title, description, source: '' });
+  const hashtagString = hashtagsArr.map(tag => `#${tag}`).join(' ');
+  // ایموجی: فقط اگر خواستی، از LLM یا منطق جدید (در صورت وجود) استفاده کن، نه categorizeContent
+  // در اینجا فعلاً بدون ایموجی یا با یک ایموجی ثابت (مثلاً 📰)
+  const emoji = '📰';
   // Construct the post
   return `${emoji} <b>${title}</b>\n\n${bulletPoints}\n\n${hashtagString}\n@ramznewsofficial | اخبار رمزی`;
 }

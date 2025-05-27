@@ -9,6 +9,7 @@
  */
 
 import { CONFIG } from './config.js';
+import { extractHashtags } from './shared/hashtags.js';
 
 // Telegram API Base URL
 const TELEGRAM_API_BASE = 'https://api.telegram.org/bot';
@@ -86,15 +87,14 @@ function validatePostBeforeSending(post) {
   console.log('Validating post:', post.id);
   console.log('Post content:', post.telegram_text);
   let text = post.telegram_text;
-  // استخراج ایموجی و هشتگ با هوش مصنوعی و الگوریتم کمکی
-  const { emoji, suggestedHashtags } = require('./shared/category.js').categorizeContent(post.title || '', post.description || '');
-  // اگر هشتگ نبود، اضافه کن
-  if (!text.includes('#')) {
-    text += '\n\n' + suggestedHashtags.map(tag => `#${tag}`).join(' ');
+  // فقط اگر post.hashtags وجود داشت و هیچ هشتگی در متن نبود، اضافه کن
+  if (post.hashtags && post.hashtags.length > 0 && !text.includes('#')) {
+    text += '\n\n' + post.hashtags.map(tag => `#${tag}`).join(' ');
   }
-  // اگر ایموجی در ابتدای متن نبود، اضافه کن
-  if (!text.trim().startsWith(emoji)) {
-    text = `${emoji} ` + text.trim();
+  // فقط اگر ابتدای متن هیچ ایموجی نبود و post.emoji وجود داشت، اضافه کن
+  const emojiRegex = /^([\uD800-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]|[\u1F300-\u1F6FF]|[\u1F900-\u1F9FF]|[\u1FA70-\u1FAFF])/;
+  if (post.emoji && !emojiRegex.test(text.trim())) {
+    text = `${post.emoji} ` + text.trim();
   }
   // اگر بولت نبود، خطوط را بولت‌دار کن
   const lines = text.split('\n');
