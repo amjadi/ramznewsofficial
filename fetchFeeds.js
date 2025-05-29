@@ -67,17 +67,20 @@ async function processFeed(feedUrl, env) {
     
     const text = await response.text();
     
+    // Check feed type from config
+    const isCryptoFeed = CONFIG.RSS_FEED_TYPES[feedUrl] === "crypto";
+    
     // Determine feed type and extract items using regex
     let items = [];
     if (text.includes('<rss') || text.includes('<channel>')) {
       // RSS feed
-      items = extractRssItemsWithRegex(text, feedUrl);
+      items = extractRssItemsWithRegex(text, feedUrl, isCryptoFeed);
     } else if (text.includes('<feed')) {
       // Atom feed
-      items = extractAtomItemsWithRegex(text, feedUrl);
+      items = extractAtomItemsWithRegex(text, feedUrl, isCryptoFeed);
     } else if (text.includes('<rdf:RDF')) {
       // RDF feed (DW)
-      items = extractRdfItemsWithRegex(text, feedUrl);
+      items = extractRdfItemsWithRegex(text, feedUrl, isCryptoFeed);
     } else {
       throw new Error('Unknown feed format');
     }
@@ -103,7 +106,7 @@ async function processFeed(feedUrl, env) {
 /**
  * Extract RSS feed items using regex
  */
-function extractRssItemsWithRegex(text, feedUrl) {
+function extractRssItemsWithRegex(text, feedUrl, isCryptoFeed) {
   try {
     // Extract source/title
     const sourceMatch = text.match(/<channel>[\s\S]*?<title>(.*?)<\/title>/);
@@ -115,14 +118,33 @@ function extractRssItemsWithRegex(text, feedUrl) {
     
     return itemMatches.map(itemText => {
       // Extract item properties
-      const titleMatch = itemText.match(/<title>(.*?)<\/title>/);
-      const linkMatch = itemText.match(/<link>(.*?)<\/link>/);
-      const descMatch = itemText.match(/<description>([\s\S]*?)<\/description>/);
+      const titleMatch = itemText.match(/<title>([\s\S]*?)<\/title>/);
+      const linkMatch = itemText.match(/<link>([\s\S]*?)<\/link>/);
+      
+      // Extract description or content:encoded based on feed type
+      let description = '';
+      
+      if (isCryptoFeed) {
+        // For crypto feeds, extract content:encoded tag and process paragraphs
+        const contentEncodedMatch = itemText.match(/<content:encoded>([\s\S]*?)<\/content:encoded>/);
+        if (contentEncodedMatch) {
+          // Extract paragraphs from content:encoded
+          description = extractAndProcessParagraphs(contentEncodedMatch[1]);
+        } else {
+          // Fallback to description if content:encoded is not available
+          const descMatch = itemText.match(/<description>([\s\S]*?)<\/description>/);
+          description = descMatch ? sanitizeHtml(descMatch[1]) : '';
+        }
+      } else {
+        // For political news feeds, use description tag
+        const descMatch = itemText.match(/<description>([\s\S]*?)<\/description>/);
+        description = descMatch ? sanitizeHtml(descMatch[1]) : '';
+      }
+      
       const dateMatch = itemText.match(/<pubDate>(.*?)<\/pubDate>/);
       
       const title = titleMatch ? titleMatch[1] : '';
       const link = linkMatch ? linkMatch[1] : '';
-      const description = descMatch ? sanitizeHtml(descMatch[1]) : '';
       const pubDate = dateMatch ? dateMatch[1] : '';
       
       // Generate a unique identifier for this item
@@ -136,7 +158,8 @@ function extractRssItemsWithRegex(text, feedUrl) {
         pubDate,
         source,
         timestamp: new Date().toISOString(),
-        feedType: 'rss'
+        feedType: 'rss',
+        isCryptoFeed
       };
     });
   } catch (error) {
@@ -148,7 +171,7 @@ function extractRssItemsWithRegex(text, feedUrl) {
 /**
  * Extract Atom feed items using regex
  */
-function extractAtomItemsWithRegex(text, feedUrl) {
+function extractAtomItemsWithRegex(text, feedUrl, isCryptoFeed) {
   try {
     // Extract source/title
     const sourceMatch = text.match(/<feed[\s\S]*?<title>(.*?)<\/title>/);
@@ -162,14 +185,32 @@ function extractAtomItemsWithRegex(text, feedUrl) {
       // Extract entry properties
       const titleMatch = entryText.match(/<title>(.*?)<\/title>/);
       const linkMatch = entryText.match(/<link[^>]*href="([^"]*)"[^>]*>/);
-      const contentMatch = entryText.match(/<content[^>]*>([\s\S]*?)<\/content>/) || 
-                          entryText.match(/<summary[^>]*>([\s\S]*?)<\/summary>/);
+      
+      // Extract content based on feed type
+      let content = '';
+      
+      if (isCryptoFeed) {
+        // For crypto feeds, prioritize content tag and process paragraphs
+        const contentMatch = entryText.match(/<content[^>]*>([\s\S]*?)<\/content>/);
+        if (contentMatch) {
+          content = extractAndProcessParagraphs(contentMatch[1]);
+        } else {
+          // Fallback to summary if content is not available
+          const summaryMatch = entryText.match(/<summary[^>]*>([\s\S]*?)<\/summary>/);
+          content = summaryMatch ? sanitizeHtml(summaryMatch[1]) : '';
+        }
+      } else {
+        // For political news feeds, use summary or content
+        const contentMatch = entryText.match(/<content[^>]*>([\s\S]*?)<\/content>/) || 
+                           entryText.match(/<summary[^>]*>([\s\S]*?)<\/summary>/);
+        content = contentMatch ? sanitizeHtml(contentMatch[1]) : '';
+      }
+      
       const dateMatch = entryText.match(/<published>(.*?)<\/published>/) || 
                        entryText.match(/<updated>(.*?)<\/updated>/);
       
       const title = titleMatch ? titleMatch[1] : '';
       const link = linkMatch ? linkMatch[1] : '';
-      const content = contentMatch ? sanitizeHtml(contentMatch[1]) : '';
       const published = dateMatch ? dateMatch[1] : '';
       
       // Generate a unique identifier for this item
@@ -183,7 +224,8 @@ function extractAtomItemsWithRegex(text, feedUrl) {
         pubDate: published,
         source,
         timestamp: new Date().toISOString(),
-        feedType: 'atom'
+        feedType: 'atom',
+        isCryptoFeed
       };
     });
   } catch (error) {
@@ -195,7 +237,7 @@ function extractAtomItemsWithRegex(text, feedUrl) {
 /**
  * Extract RDF feed items using regex
  */
-function extractRdfItemsWithRegex(text, feedUrl) {
+function extractRdfItemsWithRegex(text, feedUrl, isCryptoFeed) {
   try {
     // Extract source/title
     const sourceMatch = text.match(/<title>(.*?)<\/title>/);
@@ -206,14 +248,32 @@ function extractRdfItemsWithRegex(text, feedUrl) {
     return itemMatches.map(itemText => {
       const titleMatch = itemText.match(/<title>([\s\S]*?)<\/title>/);
       const linkMatch = itemText.match(/<link>([\s\S]*?)<\/link>/);
-      const descMatch = itemText.match(/<description>([\s\S]*?)<\/description>/);
+      
+      // Extract description based on feed type
+      let description = '';
+      
+      if (isCryptoFeed) {
+        // For crypto feeds, look for content:encoded first
+        const contentEncodedMatch = itemText.match(/<content:encoded>([\s\S]*?)<\/content:encoded>/);
+        if (contentEncodedMatch) {
+          description = extractAndProcessParagraphs(contentEncodedMatch[1]);
+        } else {
+          // Fallback to description
+          const descMatch = itemText.match(/<description>([\s\S]*?)<\/description>/);
+          description = descMatch ? sanitizeHtml(descMatch[1]) : '';
+        }
+      } else {
+        // For political news feeds, use description
+        const descMatch = itemText.match(/<description>([\s\S]*?)<\/description>/);
+        description = descMatch ? sanitizeHtml(descMatch[1]) : '';
+      }
+      
       const dateMatch = itemText.match(/<dc:date>([\s\S]*?)<\/dc:date>/);
       const subjectMatch = itemText.match(/<dc:subject>([\s\S]*?)<\/dc:subject>/);
       const langMatch = itemText.match(/<dc:language>([\s\S]*?)<\/dc:language>/);
       const idMatch = itemText.match(/<dwsyn:contentID>([\s\S]*?)<\/dwsyn:contentID>/);
       const title = titleMatch ? titleMatch[1].trim() : '';
       const link = linkMatch ? linkMatch[1].trim() : '';
-      const description = descMatch ? sanitizeHtml(descMatch[1]) : '';
       const pubDate = dateMatch ? dateMatch[1].trim() : '';
       const category = subjectMatch ? subjectMatch[1].trim() : '';
       const language = langMatch ? langMatch[1].trim() : '';
@@ -230,12 +290,71 @@ function extractRdfItemsWithRegex(text, feedUrl) {
         language,
         source,
         timestamp: new Date().toISOString(),
-        feedType: 'rdf'
+        feedType: 'rdf',
+        isCryptoFeed
       };
     }).filter(item => item !== null);
   } catch (error) {
     console.error('Error extracting RDF items with regex:', error);
     return [];
+  }
+}
+
+/**
+ * Extract and process paragraphs from HTML content
+ * Specifically for crypto news items using content:encoded
+ */
+function extractAndProcessParagraphs(htmlContent) {
+  try {
+    if (!htmlContent) return '';
+    
+    // Extract paragraphs
+    const paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
+    const paragraphs = [];
+    let match;
+    
+    while ((match = paragraphRegex.exec(htmlContent)) !== null) {
+      // Clean paragraph text
+      const cleanText = sanitizeHtml(match[1]).trim();
+      if (cleanText && cleanText.length > 20) { // Only include non-empty, meaningful paragraphs
+        paragraphs.push(cleanText);
+      }
+    }
+    
+    // If no paragraphs found, return the sanitized full content
+    if (paragraphs.length === 0) {
+      return sanitizeHtml(htmlContent);
+    }
+    
+    // Use configured values for telegram limit and max paragraphs
+    const TELEGRAM_LIMIT = CONFIG.PROCESSING.TELEGRAM_CHAR_LIMIT;
+    const MAX_PARAGRAPHS = CONFIG.PROCESSING.MAX_CRYPTO_PARAGRAPHS;
+    
+    let selectedParagraphs = [];
+    let totalLength = 0;
+    
+    // Try to include 1-3 complete paragraphs (or as configured)
+    for (let i = 0; i < Math.min(paragraphs.length, MAX_PARAGRAPHS); i++) {
+      const paragraphLength = paragraphs[i].length;
+      
+      // Add spacing between paragraphs
+      const spacing = i > 0 ? 2 : 0; // "\n\n" between paragraphs
+      
+      // Check if adding this paragraph would exceed the limit
+      if (totalLength + paragraphLength + spacing > TELEGRAM_LIMIT) {
+        break;
+      }
+      
+      // Add paragraph to selection
+      selectedParagraphs.push(paragraphs[i]);
+      totalLength += paragraphLength + spacing;
+    }
+    
+    // Join selected paragraphs with double newlines
+    return selectedParagraphs.join('\n\n');
+  } catch (error) {
+    console.error('Error extracting paragraphs:', error);
+    return sanitizeHtml(htmlContent); // Fallback to regular sanitization
   }
 }
 
@@ -303,12 +422,17 @@ function processFeedItem(item, feedSource) {
       description: cleanText(item.description || item.summary || item.content),
       pubDate: item.pubDate || item.published || item.date || new Date().toISOString(),
       source: feedSource,
-      category: item.category || ''
+      category: item.category || '',
+      isCryptoFeed: item.isCryptoFeed || false
     };
-    // فقط اگر موضوع سیاست یا ایران بود نگه دار
-    if (processedItem.category && processedItem.category !== 'سیاست' && processedItem.category !== 'ایران') {
-      console.log(`Skipping item with non-political/economic category: ${processedItem.id}`);
-      return null;
+    
+    // For political news (non-crypto), apply additional filters
+    if (!processedItem.isCryptoFeed) {
+      // فقط اگر موضوع سیاست یا ایران بود نگه دار
+      if (processedItem.category && processedItem.category !== 'سیاست' && processedItem.category !== 'ایران') {
+        console.log(`Skipping item with non-political/economic category: ${processedItem.id}`);
+        return null;
+      }
     }
     
     // Skip items without essential data

@@ -6,7 +6,7 @@
  */
 
 import { fetchFeeds } from './fetchFeeds.js';
-import { formatWithAI } from './aiFormatter.js';
+import { formatPost } from './formatter.js';
 import { sendToTelegram } from './sendTelegram.js';
 import { CONFIG } from './config.js';
 
@@ -69,7 +69,7 @@ export async function processQueue(env) {
     for (const item of itemsToProcess) {
       try {
         console.log(`Formatting item: ${item.id}`);
-        const formattedPost = await formatWithAI(item, env);
+        const formattedPost = await formatPost(item, env);
         
         if (formattedPost) {
           // Enhanced validation before sending
@@ -151,7 +151,7 @@ export async function testFormatPost(env, testItem) {
     
     // Process the item with AI formatter
     console.log(`Formatting test item: ${testItem.id}`);
-    const formattedPost = await formatWithAI(testItem, env);
+    const formattedPost = await formatPost(testItem, env);
     
     // Perform detailed validation
     const validationResults = validateFormattedPost(formattedPost);

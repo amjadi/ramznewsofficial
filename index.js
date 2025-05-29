@@ -6,7 +6,7 @@
  */
 
 import { fetchFeeds } from './fetchFeeds.js';
-import { formatWithAI } from './aiFormatter.js';
+import { formatPost } from './formatter.js';
 import { sendToTelegram } from './sendTelegram.js';
 import { setupWebhook, getWebhookInfo, deleteWebhook } from './setupWebhook.js';
 import { triggerFetchFeeds, checkQueueStatus, initializeQueue, processQueue } from './manual-trigger.js';
@@ -124,7 +124,7 @@ export default {
           try {
             // Step 2: Format with AI
             console.log(`Formatting item: ${item.id}`);
-            const formattedPost = await formatWithAI(item, env);
+            const formattedPost = await formatPost(item, env);
             
             // Step 3: Validate post quality before sending
             if (!formattedPost || !formattedPost.telegram_text) {
