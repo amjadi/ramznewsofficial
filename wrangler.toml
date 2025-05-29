@@ -1,4 +1,4 @@
-name = "ramznews-gen2"
+name = "ramznewsofficial"
 main = "index.js"
 compatibility_date = "2023-01-01"
 usage_model = "bundled"
